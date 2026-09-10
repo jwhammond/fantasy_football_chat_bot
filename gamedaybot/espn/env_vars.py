@@ -8,14 +8,14 @@ def get_env_vars():
     try:
         ff_start_date = os.environ["START_DATE"]
     except KeyError:
-        ff_start_date = '2024-09-05'
+        ff_start_date = '2026-09-10'
 
     data['ff_start_date'] = ff_start_date
 
     try:
         ff_end_date = os.environ["END_DATE"]
     except KeyError:
-        ff_end_date = '2025-01-05'
+        ff_end_date = '2027-01-10'
 
     data['ff_end_date'] = ff_end_date
 
@@ -39,6 +39,16 @@ def get_env_vars():
         monitor_report = True
 
     data['monitor_report'] = monitor_report
+
+    try:
+        close_scores_threshold = int(os.environ["CLOSE_SCORES_THRESHOLD"])
+    except (KeyError, ValueError):
+        # Unset, or set to something that is not a whole number. A typo in one
+        # optional env var should not take down every scheduled message, so
+        # fall back to the default rather than raise.
+        close_scores_threshold = espn.CLOSE_SCORES_DEFAULT_THRESHOLD
+
+    data['close_scores_threshold'] = close_scores_threshold
 
     str_limit = 40000  # slack char limit
 
@@ -76,7 +86,7 @@ def get_env_vars():
     try:
         year = int(os.environ["LEAGUE_YEAR"])
     except KeyError:
-        year = 2024
+        year = 2026
 
     data['year'] = year
 
@@ -105,20 +115,6 @@ def get_env_vars():
         test = False
 
     data['test'] = test
-
-    try:
-        top_half_scoring = utils.str_to_bool(os.environ["TOP_HALF_SCORING"])
-    except KeyError:
-        top_half_scoring = False
-
-    data['top_half_scoring'] = top_half_scoring
-
-    try:
-        random_phrase = utils.str_to_bool(os.environ["RANDOM_PHRASE"])
-    except KeyError:
-        random_phrase = False
-
-    data['random_phrase'] = random_phrase
 
     try:
         waiver_report = utils.str_to_bool(os.environ["WAIVER_REPORT"])

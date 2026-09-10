@@ -59,10 +59,9 @@ def espn_bot(function):
         If not provided, defaults to '{1}'.
     espn_s2: the espn s2 of the league.
         If not provided, defaults to '1'.
-    top_half_scoring: a boolean that indicates whether to include only the top half of the league in the standings.
-        If not provided, defaults to False.
-    random_phrase: a boolean that indicates whether to include a random phrase in the message.
-        If not provided, defaults to False.
+    close_scores_threshold: the largest projected point difference that still
+        counts as a close matchup.
+        If not provided, defaults to functionality.CLOSE_SCORES_DEFAULT_THRESHOLD.
 
     The function creates GroupMe, Slack, and Discord objects, and a League object using the provided information.
     It then uses the specified function to generate a message and sends it through the appropriate messaging platform.
@@ -112,7 +111,7 @@ def espn_bot(function):
     try:
         year = int(data['year'])
     except KeyError:
-        year = 2024
+        year = 2026
 
     try:
         swid = data['swid']
@@ -130,14 +129,9 @@ def espn_bot(function):
         espn_s2 = '1'
 
     try:
-        top_half_scoring = util.str_to_bool(data['top_half_scoring'])
+        close_scores_threshold = data['close_scores_threshold']
     except KeyError:
-        top_half_scoring = False
-
-    try:
-        random_phrase = util.str_to_bool(data['random_phrase'])
-    except KeyError:
-        random_phrase = False
+        close_scores_threshold = espn.CLOSE_SCORES_DEFAULT_THRESHOLD
 
     groupme_bot = GroupMe(bot_id)
     slack_bot = Slack(slack_webhook_url)
@@ -154,7 +148,7 @@ def espn_bot(function):
         broadcast_message = None
 
     # always let init and broadcast run
-    if function not in ["init", "broadcast", "win_matrix", "trophy_recap"] and league.scoringPeriodId > len(league.settings.matchup_periods):
+    if function not in ["init", "broadcast", "win_matrix", "trophy_recap"] and (league.scoringPeriodId > league.finalScoringPeriod or league.scoringPeriodId < league.firstScoringPeriod):
         logger.info("Not in active season")
         return
 
@@ -162,23 +156,27 @@ def espn_bot(function):
     logger.info("Function: " + function)
 
     if function == "get_matchups":
-        text = espn.get_matchups(league, random_phrase)
-        text = text + "\n\n" + espn.get_projected_scoreboard(league)
+        box_scores = espn.fetch_box_scores(league)
+        text = espn.get_matchups(league, box_scores=box_scores)
+        if text != util.NO_MATCHUP_DATA:
+            text = text + "\n\n" + espn.get_projected_scoreboard(league, box_scores=box_scores)
     elif function == "get_monitor":
         text = espn.get_monitor(league)
     elif function == "get_scoreboard_short":
-        text = espn.get_scoreboard_short(league)
-        text = text + "\n\n" + espn.get_projected_scoreboard(league)
+        box_scores = espn.fetch_box_scores(league)
+        text = espn.get_scoreboard_short(league, box_scores=box_scores)
+        if text != util.NO_MATCHUP_DATA:
+            text = text + "\n\n" + espn.get_projected_scoreboard(league, box_scores=box_scores)
     elif function == "get_projected_scoreboard":
         text = espn.get_projected_scoreboard(league)
     elif function == "get_close_scores":
-        text = espn.get_close_scores(league)
+        text = espn.get_close_scores(league, threshold=close_scores_threshold)
     elif function == "get_power_rankings":
         text = espn.get_power_rankings(league)
     elif function == "get_trophies":
         text = espn.get_trophies(league)
     elif function == "get_standings":
-        text = espn.get_standings(league, top_half_scoring)
+        text = espn.get_standings(league)
     elif function == "win_matrix":
         text = recap.win_matrix(league)
     elif function == "trophy_recap":
@@ -189,9 +187,14 @@ def espn_bot(function):
     elif function == "get_final":
         # on Tuesday we need to get the scores of last week
         week = league.current_week - 1
-        text = "Final " + espn.get_scoreboard_short(league, week=week)
-        text = text + "\n\n" + espn.get_trophies(league, week=week)
-    elif function == "get_waiver_report" and swid != '{1}' and espn_s2 != '1':
+        box_scores = espn.fetch_box_scores(league, week=week)
+        scores = espn.get_scoreboard_short(league, week=week, box_scores=box_scores)
+        if scores == util.NO_MATCHUP_DATA:
+            text = scores
+        else:
+            text = "Final " + scores
+            text = text + "\n\n" + espn.get_trophies(league, week=week, box_scores=box_scores)
+    elif function == "get_waiver_report":
         faab = league.settings.faab
         text = espn.get_waiver_report(league, faab)
     elif function == "broadcast":
@@ -210,7 +213,7 @@ def espn_bot(function):
         text = "Something bad happened. HALP"
 
     logger.debug(data)
-    if text != '':
+    if util.has_sendable_content(text):
         logger.debug(text)
         messages = util.str_limit_check(text, str_limit)
         for message in messages:
