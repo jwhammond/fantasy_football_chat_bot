@@ -9,34 +9,78 @@ on:
     types:
       - published
 
+permissions:
+  contents: write # create the tag and release on a push to main
+  packages: write # push the image to GHCR
+
+# Two pushes to main in quick succession would otherwise race for the same
+# date tag and one of them would fail to create its release. Queue instead.
+concurrency:
+  group: publish-image
+  cancel-in-progress: false
+
 jobs:
   push-image:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+        uses: docker/setup-buildx-action@v2
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v1
+        uses: docker/login-action@v2
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Set tag name for releases
-        if: ${{ github.event_name == 'release' }}
-        run: echo "TAG=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF##*/}" >>${GITHUB_ENV}
+      - name: Work out the version and image tags
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
 
-      - name: Set tag name for commits
-        if: ${{ github.event_name == 'push' }}
-        run: echo "TAG=ghcr.io/${GITHUB_REPOSITORY,,}:${{ github.sha }}" >>${GITHUB_ENV}
+          if [ "${{ github.event_name }}" = "release" ]; then
+            # A release cut by hand keeps whatever tag it was given.
+            VERSION="${GITHUB_REF##*/}"
+            echo "CREATE_RELEASE=false" >> "$GITHUB_ENV"
+          else
+            # Every push to main becomes a dated release: v2026.09.10. A second
+            # push the same day takes v2026.09.10.1, a third .2, and so on, so
+            # the tag is always free. Read from the remote rather than local
+            # refs -- checkout does not fetch tags by default.
+            BASE="v$(date -u +'%Y.%m.%d')"
+            TAKEN="$(git ls-remote --tags origin | sed 's#.*refs/tags/##; s#\^{}##' | sort -u)"
+            VERSION="$BASE"
+            N=1
+            while printf '%s\n' "$TAKEN" | grep -qx -- "$VERSION"; do
+              VERSION="${BASE}.${N}"
+              N=$((N + 1))
+            done
+            echo "CREATE_RELEASE=true" >> "$GITHUB_ENV"
+          fi
+
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          # TAG is the single ref the build and test steps below load and run.
+          echo "TAG=${IMAGE}:${VERSION}" >> "$GITHUB_ENV"
+
+          # TAGS is everything the push publishes. The commit SHA rides along so
+          # an exact commit stays pinnable. `latest` moves for every release
+          # except a prerelease -- GitHub fires release:published for those too,
+          # and moving `latest` onto one would ship it to everyone tracking it.
+          {
+            echo "TAGS<<EOF"
+            echo "${IMAGE}:${VERSION}"
+            echo "${IMAGE}:${GITHUB_SHA}"
+            if [ "${{ github.event.release.prerelease }}" != "true" ]; then
+              echo "${IMAGE}:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_ENV"
 
       - name: Build image
-        uses: docker/build-push-action@v2
+        uses: docker/build-push-action@v4
         with:
           load: true
           push: false
@@ -50,8 +94,30 @@ jobs:
           pip install -r requirements-test.txt && \
           pytest"
 
+      - name: Upload coverage from image (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-image-coverage
+          path: coverage.xml
+        continue-on-error: true
+
       - name: Push image to registry
-        uses: docker/build-push-action@v2
+        uses: docker/build-push-action@v4
         with:
           push: true
-          tags: ${{ env.TAG }}
+          tags: ${{ env.TAGS }}
+
+      # Last, so a build or test failure never leaves a release pointing at an
+      # image that was never published. Creating this with GITHUB_TOKEN is
+      # deliberate: releases made with it do not trigger workflows, so this
+      # cannot re-enter the release: published path above and build twice.
+      - name: Tag and release
+        if: env.CREATE_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$VERSION" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --generate-notes

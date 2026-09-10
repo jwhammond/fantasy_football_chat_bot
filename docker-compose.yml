@@ -1,5 +1,3 @@
-version: "3.7"
-
 services:
   gamedaybot:
     build:
@@ -24,10 +22,8 @@ services:
       # TIMEZONE:
       # #The message that the bot will say when it is started (can be blank for no message)
       # INIT_MSG:
-      # #If set to True, when standings are posted on Wednesday it will also include top half scoring wins
-      # TOP_HALF_SCORING:
-      # #If set to True, when matchups are posted on Tuesday it will also include a random phrase
-      # RANDOM_PHRASE:
+      # #Largest projected point difference that still counts as a close matchup (15 by default)
+      # CLOSE_SCORES_THRESHOLD:
       # #Used for private leagues. See Private Leagues Section for documentation
       # ESPN_S2:
       # #Used for private leagues. See Private Leagues Section for documentation
