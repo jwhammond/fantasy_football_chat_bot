@@ -26,4 +26,6 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 COPY . .
 
 # Launch app
-CMD ["python3", "gamedaybot/espn/espn_bot.py"]
+# app.py binds an HTTP port (required by Render Web Services) and then runs the bot.
+# Run gamedaybot/espn/espn_bot.py directly if you do not need a port.
+CMD ["python3", "app.py"]
