@@ -149,3 +149,26 @@ class TestCloseScoresTable:
         text = espn.get_close_scores(None, box_scores=boxes)
         table = tables.close_scores_table(None, box_scores=boxes)
         assert len(text.splitlines()) - 1 == len(table.rows) == 1
+
+
+class FakeStandingsLeague:
+    def __init__(self, teams):
+        self._teams = teams
+
+    def standings(self):
+        return self._teams
+
+
+class TestStandingsTable:
+    def test_title_columns_and_rows_in_rank_order(self):
+        league = FakeStandingsLeague([FakeTeam('First', 'ONE', wins=3, losses=0),
+                                      FakeTeam('Second', 'TWO', wins=2, losses=1)])
+        t = tables.standings_table(league)
+        assert t.title == 'Current Standings'
+        assert t.headers == ['Rank', 'Record', 'Team']
+        assert t.align == ['right', 'center', 'left']
+        assert t.rows == [['1', '3-0', 'First'], ['2', '2-1', 'Second']]
+
+    def test_empty_team_name_is_not_an_empty_cell(self):
+        t = tables.standings_table(FakeStandingsLeague([FakeTeam('', 'X')]))
+        assert t.rows[0][2] == '-'

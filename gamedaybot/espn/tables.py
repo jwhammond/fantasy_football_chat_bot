@@ -107,3 +107,9 @@ def close_scores_table(league, week=None, box_scores=None,
             for box, home_projected, away_projected in close]
     return Table('Projected Close Scores', ['Home', 'Proj', 'Away', 'Proj'], rows,
                  [LEFT, RIGHT, LEFT, RIGHT])
+
+
+def standings_table(league) -> Table:
+    rows = [[str(pos), f"{team.wins}-{team.losses}", _cell(team.team_name)]
+            for pos, team in enumerate(league.standings(), start=1)]
+    return Table('Current Standings', ['Rank', 'Record', 'Team'], rows, [RIGHT, CENTER, LEFT])
