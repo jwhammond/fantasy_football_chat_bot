@@ -50,13 +50,18 @@ def _played_boxes(league, week, box_scores):
     return [box for box in box_scores if box.away_team]
 
 
+def _projection_rows(played):
+    """Build rows of [home team, home proj, away team, away proj] for a list of played boxes."""
+    return [[_team(box.home_team), _score(espn.get_projected_total(box.home_lineup)),
+             _team(box.away_team), _score(espn.get_projected_total(box.away_lineup))]
+            for box in played]
+
+
 def matchups_table(league, week=None, box_scores=None) -> Optional[Table]:
     played = _played_boxes(league, week, box_scores)
     if not played:
         return None
-    rows = [[_team(box.home_team), _score(espn.get_projected_total(box.home_lineup)),
-             _team(box.away_team), _score(espn.get_projected_total(box.away_lineup))]
-            for box in played]
+    rows = _projection_rows(played)
     return Table('Matchups', ['Home', 'Proj', 'Away', 'Proj'], rows, [LEFT, RIGHT, LEFT, RIGHT])
 
 
@@ -86,8 +91,6 @@ def projected_table(league, week=None, box_scores=None) -> Optional[Table]:
     played = _played_boxes(league, week, box_scores)
     if not played:
         return None
-    rows = [[_team(box.home_team), _score(espn.get_projected_total(box.home_lineup)),
-             _team(box.away_team), _score(espn.get_projected_total(box.away_lineup))]
-            for box in played]
+    rows = _projection_rows(played)
     return Table('Approximate Projected Scores', ['Home', 'Proj', 'Away', 'Proj'], rows,
                  [LEFT, RIGHT, LEFT, RIGHT])
