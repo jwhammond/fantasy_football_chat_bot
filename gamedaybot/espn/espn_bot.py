@@ -5,6 +5,8 @@ if os.environ.get("AWS_EXECUTION_ENV") is not None:
     from chat.groupme import GroupMe
     from chat.slack import Slack
     from chat.discord import Discord
+    import espn.tables as tables
+    from chat.slack_format import table_blocks, text_blocks
 else:
     # For local use
     import sys
@@ -16,6 +18,8 @@ else:
     from gamedaybot.espn.env_vars import get_env_vars
     import gamedaybot.espn.functionality as espn
     import gamedaybot.espn.season_recap as recap
+    import gamedaybot.espn.tables as tables
+    from gamedaybot.chat.slack_format import table_blocks, text_blocks
 
 
 from espn_api.football import League
@@ -152,6 +156,7 @@ def espn_bot(function):
         logger.info("Not in active season")
         return
 
+    slack_blocks = None
     text = ''
     logger.info("Function: " + function)
 
@@ -160,6 +165,9 @@ def espn_bot(function):
         text = espn.get_matchups(league, box_scores=box_scores)
         if text != util.NO_MATCHUP_DATA:
             text = text + "\n\n" + espn.get_projected_scoreboard(league, box_scores=box_scores)
+        table = tables.matchups_table(league, box_scores=box_scores)
+        if table:
+            slack_blocks = table_blocks(table)
     elif function == "get_monitor":
         text = espn.get_monitor(league)
     elif function == "get_scoreboard_short":
@@ -167,16 +175,29 @@ def espn_bot(function):
         text = espn.get_scoreboard_short(league, box_scores=box_scores)
         if text != util.NO_MATCHUP_DATA:
             text = text + "\n\n" + espn.get_projected_scoreboard(league, box_scores=box_scores)
+        table = tables.scoreboard_table(league, box_scores=box_scores)
+        if table:
+            slack_blocks = table_blocks(table)
     elif function == "get_projected_scoreboard":
-        text = espn.get_projected_scoreboard(league)
+        box_scores = espn.fetch_box_scores(league)
+        text = espn.get_projected_scoreboard(league, box_scores=box_scores)
+        table = tables.projected_table(league, box_scores=box_scores)
+        if table:
+            slack_blocks = table_blocks(table)
     elif function == "get_close_scores":
-        text = espn.get_close_scores(league, threshold=close_scores_threshold)
+        box_scores = espn.fetch_box_scores(league)
+        text = espn.get_close_scores(league, box_scores=box_scores, threshold=close_scores_threshold)
+        table = tables.close_scores_table(league, box_scores=box_scores, threshold=close_scores_threshold)
+        if table:
+            slack_blocks = table_blocks(table)
     elif function == "get_power_rankings":
         text = espn.get_power_rankings(league)
+        slack_blocks = table_blocks(tables.power_rankings_table(league))
     elif function == "get_trophies":
         text = espn.get_trophies(league)
     elif function == "get_standings":
         text = espn.get_standings(league)
+        slack_blocks = table_blocks(tables.standings_table(league))
     elif function == "win_matrix":
         text = recap.win_matrix(league)
     elif function == "trophy_recap":
@@ -192,8 +213,13 @@ def espn_bot(function):
         if scores == util.NO_MATCHUP_DATA:
             text = scores
         else:
+            trophies = espn.get_trophies(league, week=week, box_scores=box_scores)
             text = "Final " + scores
-            text = text + "\n\n" + espn.get_trophies(league, week=week, box_scores=box_scores)
+            text = text + "\n\n" + trophies
+            table = tables.scoreboard_table(league, week=week, box_scores=box_scores,
+                                            title="Final Score Update", projected=False)
+            if table:
+                slack_blocks = table_blocks(table) + text_blocks(trophies)
     elif function == "get_waiver_report":
         faab = league.settings.faab
         text = espn.get_waiver_report(league, faab)
@@ -218,8 +244,12 @@ def espn_bot(function):
         messages = util.str_limit_check(text, str_limit)
         for message in messages:
             groupme_bot.send_message(message)
-            slack_bot.send_message(message)
             discord_bot.send_message(message)
+        if slack_blocks:
+            slack_bot.send_blocks(slack_blocks, fallback=text)
+        else:
+            for message in messages:
+                slack_bot.send_message(message)
 
 
 if __name__ == '__main__':
