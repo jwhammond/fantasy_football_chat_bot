@@ -47,3 +47,40 @@ def table_blocks(table):
             'rows': [[_raw_text(cell) for cell in row] for row in rows],
         },
     ]
+
+
+# Slack caps a section's text at 3000 characters. Code-block bodies are split
+# below this so the fence characters and title fit alongside them.
+SECTION_BODY_LIMIT = 2900
+
+
+def _section(text):
+    return {'type': 'section', 'text': {'type': 'mrkdwn', 'text': text}}
+
+
+def _chunk_lines(lines, limit):
+    """Group lines into chunks whose joined length stays within limit."""
+    chunks, current, size = [], [], 0
+    for line in lines:
+        if current and size + len(line) + 1 > limit:
+            chunks.append(current)
+            current, size = [], 0
+        current.append(line)
+        size += len(line) + 1
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def text_blocks(text):
+    """Render a text report: a lone line as plain text, otherwise a bold title
+    over a code block that preserves the report's column alignment."""
+    lines = escape(text).split('\n')
+    if len(lines) == 1:
+        return [_section(lines[0])]
+    title, body = lines[0], lines[1:]
+    blocks = []
+    for index, chunk in enumerate(_chunk_lines(body, SECTION_BODY_LIMIT)):
+        code = '```\n' + '\n'.join(chunk) + '\n```'
+        blocks.append(_section(f'*{title}*\n{code}' if index == 0 else code))
+    return blocks

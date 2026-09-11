@@ -59,3 +59,34 @@ class TestTableBlocks:
         t = Table('Wide', ['h'] * n, [['c'] * n], ['left'] * n)
         with pytest.raises(ValueError):
             fmt.table_blocks(t)
+
+
+class TestTextBlocks:
+    def test_single_line_is_plain_section_without_code_block(self):
+        assert fmt.text_blocks('bot is back online') == [
+            {'type': 'section', 'text': {'type': 'mrkdwn', 'text': 'bot is back online'}}]
+
+    def test_single_line_is_escaped(self):
+        assert fmt.text_blocks('a < b')[0]['text']['text'] == 'a &lt; b'
+
+    def test_multiline_bolds_first_line_and_code_blocks_the_rest(self):
+        blocks = fmt.text_blocks('Waiver Report 2026-09-10:\nTEAM\nADDED Player A\nDROPPED Player B')
+        assert blocks == [{'type': 'section', 'text': {
+            'type': 'mrkdwn',
+            'text': '*Waiver Report 2026-09-10:*\n```\nTEAM\nADDED Player A\nDROPPED Player B\n```'}}]
+
+    def test_body_is_escaped_inside_code_block(self):
+        text = fmt.text_blocks('Title\nA & B')[0]['text']['text']
+        assert 'A &amp; B' in text
+
+    def test_long_body_splits_across_sections_at_line_boundaries(self):
+        lines = [f'line {i:04d} ' + 'x' * 90 for i in range(60)]  # ~6000 chars
+        blocks = fmt.text_blocks('Title\n' + '\n'.join(lines))
+        assert len(blocks) >= 2
+        assert blocks[0]['text']['text'].startswith('*Title*\n```\n')
+        for block in blocks:
+            assert len(block['text']['text']) <= 3000
+            body = block['text']['text'].split('```')[1]
+            assert all(line.startswith('line ') for line in body.strip('\n').split('\n'))
+        joined = '\n'.join(b['text']['text'].split('```')[1].strip('\n') for b in blocks)
+        assert joined.split('\n') == lines
