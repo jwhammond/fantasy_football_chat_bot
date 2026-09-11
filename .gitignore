@@ -140,3 +140,6 @@ gamedaybot/ids.txt
 
 # Local deployment secrets
 *.env
+
+# superpowers SDD scratch workspace
+.superpowers/
