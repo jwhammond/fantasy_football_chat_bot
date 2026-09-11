@@ -62,7 +62,7 @@ Builders return `None` when the corresponding text builder would return its
 | Builder | Title | Columns (alignment) | Rows | Returns `None` when |
 |---|---|---|---|---|
 | `matchups_table(league, week=None, box_scores=None)` | `Matchups` | Home (left, wrapped), Proj (right), Away (left, wrapped), Proj (right) | one per box score with an away team; team cell is `"{team_name} ({wins}-{losses})"`; Proj is `get_projected_total` of the lineup, `%.2f` | no box score has an away team |
-| `scoreboard_table(league, week=None, box_scores=None, title="Score Update")` | given title | Home, Score (right), Proj (right), Away, Score (right), Proj (right) | one per box score with an away team; scores `%.2f` | no box score has an away team |
+| `scoreboard_table(league, week=None, box_scores=None, title="Score Update", projected=True)` | given title | Home, Score (right), Proj (right), Away, Score (right), Proj (right); the two Proj columns are omitted when `projected=False` | one per box score with an away team; scores `%.2f` | no box score has an away team |
 | `projected_table(league, week=None, box_scores=None)` | `Approximate Projected Scores` | Home, Proj (right), Away, Proj (right) | as above | no box score has an away team |
 | `close_scores_table(league, week=None, box_scores=None, threshold=...)` | `Projected Close Scores` | Home, Proj (right), Away, Proj (right) | same selection rule as `get_close_scores` | no matchup is within the threshold |
 | `standings_table(league)` | `Current Standings` | Rank (right), Record (center), Team (left, wrapped) | one per team from `league.standings()` | never |
@@ -133,7 +133,7 @@ the body exceeds 2,900 characters, so long waiver reports still send.
 | `get_close_scores` | `table_blocks(close_scores_table(...))` |
 | `get_standings` | `table_blocks(standings_table(...))` |
 | `get_power_rankings` | `table_blocks(power_rankings_table(...))` |
-| `get_final` | `table_blocks(scoreboard_table(..., title="Final Score Update"))` + `text_blocks(trophies)` |
+| `get_final` | `table_blocks(scoreboard_table(..., title="Final Score Update", projected=False))` + `text_blocks(trophies)` (projections are meaningless after the games are played) |
 | everything else | not set |
 
 Sending:
