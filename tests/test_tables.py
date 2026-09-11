@@ -3,6 +3,7 @@ import os
 sys.path.insert(1, os.path.abspath('.'))
 
 import gamedaybot.espn.tables as tables
+import gamedaybot.espn.functionality as espn
 from gamedaybot.espn.tables import Table
 
 
@@ -110,3 +111,41 @@ class TestProjectedTable:
 
     def test_returns_none_when_no_matchups(self):
         assert tables.projected_table(None, box_scores=[]) is None
+
+
+class TestCloseMatchupsHelper:
+    def test_returns_box_with_projections_inside_threshold(self):
+        box = FakeBox(HOME, AWAY, home_proj=100.0, away_proj=110.0)
+        assert espn.close_matchups([box], 15) == [(box, 100.0, 110.0)]
+
+    def test_excludes_outside_threshold(self):
+        assert espn.close_matchups([FakeBox(HOME, AWAY, home_proj=100.0, away_proj=130.0)], 15) == []
+
+    def test_excludes_completed_games(self):
+        assert espn.close_matchups([FakeBox(HOME, AWAY, home_proj=100.0, away_proj=101.0, played=True)], 15) == []
+
+    def test_excludes_byes(self):
+        assert espn.close_matchups([FakeBox(HOME, None)], 15) == []
+
+
+class TestCloseScoresTable:
+    def test_title_columns_and_row(self):
+        t = tables.close_scores_table(None, box_scores=[FakeBox(HOME, AWAY, home_proj=100.0, away_proj=105.5)])
+        assert t.title == 'Projected Close Scores'
+        assert t.headers == ['Home', 'Proj', 'Away', 'Proj']
+        assert t.align == ['left', 'right', 'left', 'right']
+        assert t.rows == [['The Rising Cost of Living (2-1)', '100.00', 'Studio Gibbsli (1-2)', '105.50']]
+
+    def test_threshold_is_respected(self):
+        boxes = [FakeBox(HOME, AWAY, home_proj=100.0, away_proj=130.0)]
+        assert tables.close_scores_table(None, box_scores=boxes) is None
+        assert tables.close_scores_table(None, box_scores=boxes, threshold=40) is not None
+
+    def test_matches_text_builder_selection(self):
+        boxes = [
+            FakeBox(FakeTeam('Close', 'CLS'), FakeTeam('Opp', 'OPP'), home_proj=100.0, away_proj=105.0),
+            FakeBox(FakeTeam('Far', 'FAR'), FakeTeam('Away', 'AWY'), home_proj=100.0, away_proj=150.0),
+        ]
+        text = espn.get_close_scores(None, box_scores=boxes)
+        table = tables.close_scores_table(None, box_scores=boxes)
+        assert len(text.splitlines()) - 1 == len(table.rows) == 1

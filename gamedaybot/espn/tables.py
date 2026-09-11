@@ -94,3 +94,16 @@ def projected_table(league, week=None, box_scores=None) -> Optional[Table]:
     rows = _projection_rows(played)
     return Table('Approximate Projected Scores', ['Home', 'Proj', 'Away', 'Proj'], rows,
                  [LEFT, RIGHT, LEFT, RIGHT])
+
+
+def close_scores_table(league, week=None, box_scores=None,
+                       threshold=espn.CLOSE_SCORES_DEFAULT_THRESHOLD) -> Optional[Table]:
+    if box_scores is None:
+        box_scores = espn.fetch_box_scores(league, week=week)
+    close = espn.close_matchups(box_scores, threshold)
+    if not close:
+        return None
+    rows = [[_team(box.home_team), _score(home_projected), _team(box.away_team), _score(away_projected)]
+            for box, home_projected, away_projected in close]
+    return Table('Projected Close Scores', ['Home', 'Proj', 'Away', 'Proj'], rows,
+                 [LEFT, RIGHT, LEFT, RIGHT])
