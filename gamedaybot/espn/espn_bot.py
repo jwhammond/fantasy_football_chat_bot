@@ -5,6 +5,8 @@ if os.environ.get("AWS_EXECUTION_ENV") is not None:
     from chat.groupme import GroupMe
     from chat.slack import Slack
     from chat.discord import Discord
+    import espn.tables as tables
+    from chat.slack_format import table_blocks, text_blocks
 else:
     # For local use
     import sys
@@ -16,6 +18,8 @@ else:
     from gamedaybot.espn.env_vars import get_env_vars
     import gamedaybot.espn.functionality as espn
     import gamedaybot.espn.season_recap as recap
+    import gamedaybot.espn.tables as tables
+    from gamedaybot.chat.slack_format import table_blocks, text_blocks
 
 
 from espn_api.football import League
@@ -25,6 +29,32 @@ import logging
 logger = logging.getLogger(__name__)
 # logger.setLevel(logging.INFO)
 logger.setLevel(logging.DEBUG)
+
+
+def _slack_blocks(table, extra_text=None):
+    """
+    Render a Table (and optional trailing text report) as Slack blocks.
+
+    Parameters
+    ----------
+    table : gamedaybot.espn.tables.Table or None
+        The table to render. None mirrors the "nothing to send" sentinel used
+        by the text builders.
+    extra_text : str, optional
+        A text report to append after the table, rendered with text_blocks
+        (e.g. trophies following the final score table).
+
+    Returns
+    -------
+    list of dict, or None
+        The Block Kit blocks, or None when table is None.
+    """
+    if table is None:
+        return None
+    blocks = table_blocks(table)
+    if extra_text:
+        blocks = blocks + text_blocks(extra_text)
+    return blocks
 
 
 def espn_bot(function):
@@ -45,7 +75,9 @@ def espn_bot(function):
     -----
     The function uses the following information from the data dictionary:
 
-    str_limit: the character limit for messages on slack.
+    str_limit: the character limit used to chunk messages for GroupMe and
+        Discord. Slack is not chunked; it receives the whole text in one
+        message (text_blocks enforces Slack's own section size cap).
     bot_id: the id of the GroupMe bot.
         If not provided, defaults to 1.
     slack_webhook_url: the webhook url for the slack bot.
@@ -82,7 +114,7 @@ def espn_bot(function):
     """
 
     data = get_env_vars()
-    str_limit = data['str_limit']  # slack char limit
+    str_limit = data['str_limit']  # GroupMe/Discord chunking limit; Slack is sent unchunked
 
     try:
         bot_id = data['bot_id']
@@ -152,6 +184,7 @@ def espn_bot(function):
         logger.info("Not in active season")
         return
 
+    slack_builder = None   # zero-arg callable returning a list of blocks, or None
     text = ''
     logger.info("Function: " + function)
 
@@ -160,6 +193,7 @@ def espn_bot(function):
         text = espn.get_matchups(league, box_scores=box_scores)
         if text != util.NO_MATCHUP_DATA:
             text = text + "\n\n" + espn.get_projected_scoreboard(league, box_scores=box_scores)
+        slack_builder = lambda: _slack_blocks(tables.matchups_table(league, box_scores=box_scores))
     elif function == "get_monitor":
         text = espn.get_monitor(league)
     elif function == "get_scoreboard_short":
@@ -167,16 +201,24 @@ def espn_bot(function):
         text = espn.get_scoreboard_short(league, box_scores=box_scores)
         if text != util.NO_MATCHUP_DATA:
             text = text + "\n\n" + espn.get_projected_scoreboard(league, box_scores=box_scores)
+        slack_builder = lambda: _slack_blocks(tables.scoreboard_table(league, box_scores=box_scores))
     elif function == "get_projected_scoreboard":
-        text = espn.get_projected_scoreboard(league)
+        box_scores = espn.fetch_box_scores(league)
+        text = espn.get_projected_scoreboard(league, box_scores=box_scores)
+        slack_builder = lambda: _slack_blocks(tables.projected_table(league, box_scores=box_scores))
     elif function == "get_close_scores":
-        text = espn.get_close_scores(league, threshold=close_scores_threshold)
+        box_scores = espn.fetch_box_scores(league)
+        text = espn.get_close_scores(league, box_scores=box_scores, threshold=close_scores_threshold)
+        slack_builder = lambda: _slack_blocks(
+            tables.close_scores_table(league, box_scores=box_scores, threshold=close_scores_threshold))
     elif function == "get_power_rankings":
         text = espn.get_power_rankings(league)
+        slack_builder = lambda: _slack_blocks(tables.power_rankings_table(league))
     elif function == "get_trophies":
         text = espn.get_trophies(league)
     elif function == "get_standings":
         text = espn.get_standings(league)
+        slack_builder = lambda: _slack_blocks(tables.standings_table(league))
     elif function == "win_matrix":
         text = recap.win_matrix(league)
     elif function == "trophy_recap":
@@ -192,8 +234,13 @@ def espn_bot(function):
         if scores == util.NO_MATCHUP_DATA:
             text = scores
         else:
+            trophies = espn.get_trophies(league, week=week, box_scores=box_scores)
             text = "Final " + scores
-            text = text + "\n\n" + espn.get_trophies(league, week=week, box_scores=box_scores)
+            text = text + "\n\n" + trophies
+            slack_builder = lambda: _slack_blocks(
+                tables.scoreboard_table(league, week=week, box_scores=box_scores,
+                                        title="Final Score Update", projected=False),
+                trophies)
     elif function == "get_waiver_report":
         faab = league.settings.faab
         text = espn.get_waiver_report(league, faab)
@@ -215,11 +262,27 @@ def espn_bot(function):
     logger.debug(data)
     if util.has_sendable_content(text):
         logger.debug(text)
+        # GroupMe and Discord get the text report, chunked to str_limit as before.
         messages = util.str_limit_check(text, str_limit)
         for message in messages:
             groupme_bot.send_message(message)
-            slack_bot.send_message(message)
             discord_bot.send_message(message)
+
+        # Slack table rendering happens only after GroupMe and Discord have
+        # already been sent, so a rendering problem here never blocks them.
+        # Slack gets the whole, unchunked text: text_blocks enforces Slack's
+        # own 3,000-character section cap, and chunking would give every
+        # chunk after the first a bogus bold "title" line.
+        slack_blocks = None
+        if slack_builder is not None and slack_bot.webhook_url not in Slack.UNSET:
+            try:
+                slack_blocks = slack_builder()
+            except Exception:
+                logger.exception("Slack table rendering failed; sending the text report instead")
+        if slack_blocks:
+            slack_bot.send_blocks(slack_blocks, fallback=text)
+        else:
+            slack_bot.send_message(text)
 
 
 if __name__ == '__main__':

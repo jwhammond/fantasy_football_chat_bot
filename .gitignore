@@ -137,3 +137,9 @@ gamedaybot/ids.txt
 *.sh
 *.ipynb
 .DS_STORE
+
+# Local deployment secrets
+*.env
+
+# superpowers SDD scratch workspace
+.superpowers/
