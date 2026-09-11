@@ -110,7 +110,9 @@ class TestTextBlocks:
         assert ''.join(body_parts) == 'x' * 7000
 
     def test_long_title_does_not_push_first_section_over_cap(self):
-        long_title = 'T' * 400
+        # Under MAX_TITLE_LENGTH, so it is still rendered as a bold title;
+        # test_overlong_first_line_is_body_not_title covers titles over it.
+        long_title = 'T' * (fmt.MAX_TITLE_LENGTH - 1)
         lines = [f'line {i:04d} ' + 'x' * 100 for i in range(60)]
         blocks = fmt.text_blocks(long_title + '\n' + '\n'.join(lines))
         assert all(len(b['text']['text']) <= 3000 for b in blocks)
@@ -121,3 +123,26 @@ class TestTextBlocks:
         assert blocks[0]['text']['text'].startswith('*Title*\n```\n')
         assert all('*Title*' not in b['text']['text'] for b in blocks[1:])
         assert all(len(b['text']['text']) <= 3000 for b in blocks)
+
+    def test_overlong_first_line_is_body_not_title(self):
+        first_line = 'T' * 2995
+        text = first_line + '\nbody line'
+        blocks = fmt.text_blocks(text)
+
+        assert all(len(b['text']['text']) <= 3000 for b in blocks)
+        assert all('*' + first_line not in b['text']['text'] for b in blocks)
+
+        code_bodies = []
+        for block in blocks:
+            parts = block['text']['text'].split('```')
+            assert len(parts) == 3  # no leading title text before the fence
+            assert parts[0] == ''
+            code_bodies.append(parts[1].strip('\n'))
+        # A hard-split line can pick up an extra chunk-boundary newline that
+        # isn't in the source text, so compare content with newlines removed
+        # rather than requiring an exact line-for-line reconstruction.
+        reassembled = ''.join(code_bodies).replace('\n', '')
+        assert reassembled == text.replace('\n', '')
+
+    def test_split_line_never_loops_on_nonpositive_budget(self):
+        assert list(fmt._split_line('abc', 0)) == ['a', 'b', 'c']

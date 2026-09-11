@@ -52,13 +52,25 @@ def table_blocks(table):
 # Slack caps a section's text at 3000 characters.
 SECTION_TEXT_LIMIT = 3000
 
+# A first line longer than this is treated as body text rather than a title:
+# past this length it reads as data, not a heading, and the "*title*\n" plus
+# code fences overhead could otherwise drive the first section's budget to
+# zero (or negative).
+MAX_TITLE_LENGTH = 200
+
 
 def _section(text):
     return {'type': 'section', 'text': {'type': 'mrkdwn', 'text': text}}
 
 
 def _split_line(line, budget):
-    """Yield pieces of a line that each fit within the budget."""
+    """Yield pieces of a line that each fit within the budget.
+
+    budget is clamped to at least 1 so a caller passing a nonpositive budget
+    (e.g. from an exhausted first-section budget) can never cause this to
+    loop forever yielding empty strings.
+    """
+    budget = max(1, budget)
     while len(line) > budget:
         yield line[:budget]
         line = line[budget:]
@@ -118,26 +130,38 @@ def _chunk_lines(lines, first_budget, later_budget):
 
 def text_blocks(text):
     """Render a text report: a lone line as plain text, otherwise a bold title
-    over a code block that preserves the report's column alignment."""
+    over a code block that preserves the report's column alignment.
+
+    When the first line is longer than MAX_TITLE_LENGTH it is not a title
+    (and could otherwise drive the first section's budget to zero or
+    negative): the entire text, first line included, is rendered as
+    code-block body across sections with no bold line.
+    """
     lines = escape(text).split('\n')
     if len(lines) == 1:
         return [_section(lines[0])]
-    title, body = lines[0], lines[1:]
 
-    # Calculate budgets for body chunks accounting for title and fences
-    title_overhead = len(f'*{title}*\n')
     fence_overhead = len('```\n') + len('\n```')
-    first_budget = SECTION_TEXT_LIMIT - title_overhead - fence_overhead
     later_budget = SECTION_TEXT_LIMIT - fence_overhead
+
+    if len(lines[0]) > MAX_TITLE_LENGTH:
+        body = lines
+        first_budget = later_budget
+        title = None
+    else:
+        title, body = lines[0], lines[1:]
+        # Calculate budget for the first chunk accounting for title and fences
+        title_overhead = len(f'*{title}*\n')
+        first_budget = SECTION_TEXT_LIMIT - title_overhead - fence_overhead
 
     # Chunk the body lines
     chunks = _chunk_lines(body, first_budget, later_budget)
 
-    # Render blocks: title on first chunk, code block on all chunks
+    # Render blocks: title (if any) on first chunk, code block on all chunks
     blocks = []
     for index, chunk in enumerate(chunks):
         code = '```\n' + '\n'.join(chunk) + '\n```'
-        if index == 0:
+        if index == 0 and title is not None:
             blocks.append(_section(f'*{title}*\n{code}'))
         else:
             blocks.append(_section(code))
