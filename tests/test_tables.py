@@ -73,3 +73,40 @@ class TestMatchupsTable:
     def test_no_cell_is_empty(self):
         t = tables.matchups_table(None, box_scores=[FakeBox(FakeTeam('', ''), AWAY)])
         assert all(cell for row in t.rows for cell in row)
+
+
+class TestScoreboardTable:
+    def test_default_title_and_columns_include_projections(self):
+        t = tables.scoreboard_table(None, box_scores=[FakeBox(HOME, AWAY)])
+        assert t.title == 'Score Update'
+        assert t.headers == ['Home', 'Score', 'Proj', 'Away', 'Score', 'Proj']
+        assert t.align == ['left', 'right', 'right', 'left', 'right', 'right']
+
+    def test_row_has_scores_and_projections(self):
+        box = FakeBox(HOME, AWAY, home_proj=110.0, away_proj=95.5, home_score=54.2, away_score=61.0)
+        t = tables.scoreboard_table(None, box_scores=[box])
+        assert t.rows == [['The Rising Cost of Living (2-1)', '54.20', '110.00',
+                           'Studio Gibbsli (1-2)', '61.00', '95.50']]
+
+    def test_projected_false_drops_proj_columns(self):
+        box = FakeBox(HOME, AWAY, home_score=54.2, away_score=61.0)
+        t = tables.scoreboard_table(None, box_scores=[box], title='Final Score Update', projected=False)
+        assert t.title == 'Final Score Update'
+        assert t.headers == ['Home', 'Score', 'Away', 'Score']
+        assert t.align == ['left', 'right', 'left', 'right']
+        assert t.rows == [['The Rising Cost of Living (2-1)', '54.20', 'Studio Gibbsli (1-2)', '61.00']]
+
+    def test_returns_none_when_no_matchups(self):
+        assert tables.scoreboard_table(None, box_scores=[FakeBox(HOME, None)]) is None
+
+
+class TestProjectedTable:
+    def test_title_columns_and_row(self):
+        t = tables.projected_table(None, box_scores=[FakeBox(HOME, AWAY, home_proj=102.43, away_proj=93.76)])
+        assert t.title == 'Approximate Projected Scores'
+        assert t.headers == ['Home', 'Proj', 'Away', 'Proj']
+        assert t.align == ['left', 'right', 'left', 'right']
+        assert t.rows == [['The Rising Cost of Living (2-1)', '102.43', 'Studio Gibbsli (1-2)', '93.76']]
+
+    def test_returns_none_when_no_matchups(self):
+        assert tables.projected_table(None, box_scores=[]) is None
