@@ -113,3 +113,12 @@ def standings_table(league) -> Table:
     rows = [[str(pos), f"{team.wins}-{team.losses}", _cell(team.team_name)]
             for pos, team in enumerate(league.standings(), start=1)]
     return Table('Current Standings', ['Rank', 'Record', 'Team'], rows, [RIGHT, CENTER, LEFT])
+
+
+def power_rankings_table(league, week=None) -> Table:
+    rows = []
+    for rank, (team, score, change) in enumerate(espn.power_ranking_rows(league, week=week), start=1):
+        change_cell = EMPTY_CELL if change is None else f"{espn.rank_change_emoji(change)}{abs(change):.1f}%"
+        rows.append([str(rank), _cell(team.team_name), score, change_cell, f"{team.playoff_pct:.1f}"])
+    return Table('Power Rankings', ['Rank', 'Team', 'Score', 'Change', 'Playoff %'], rows,
+                 [RIGHT, LEFT, RIGHT, RIGHT, RIGHT])

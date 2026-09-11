@@ -172,3 +172,64 @@ class TestStandingsTable:
     def test_empty_team_name_is_not_an_empty_cell(self):
         t = tables.standings_table(FakeStandingsLeague([FakeTeam('', 'X')]))
         assert t.rows[0][2] == '-'
+
+
+class FakePowerLeague:
+    """power_rankings(week) returns [(score_str, team), ...] like espn_api."""
+
+    def __init__(self, by_week, current_week=3):
+        self._by_week = by_week
+        self.current_week = current_week
+
+    def power_rankings(self, week):
+        return self._by_week.get(week, [])
+
+
+UP = FakeTeam('Climber', 'UP', playoff_pct=80.0)
+DOWN = FakeTeam('Faller', 'DN', playoff_pct=20.5)
+
+
+class TestPowerRankingRowsHelper:
+    def test_normalizes_top_score_to_99_99(self):
+        league = FakePowerLeague({2: [('50.0', UP), ('25.0', DOWN)]})
+        rows = espn.power_ranking_rows(league, week=2)
+        assert [(t.team_abbrev, s) for t, s, _ in rows] == [('UP', '99.99'), ('DN', '49.99')]
+
+    def test_change_is_none_on_first_week(self):
+        league = FakePowerLeague({1: [('50.0', UP)]})
+        assert espn.power_ranking_rows(league, week=1)[0][2] is None
+
+    def test_change_percent_against_previous_week(self):
+        league = FakePowerLeague({1: [('50.0', UP), ('50.0', DOWN)],
+                                  2: [('50.0', UP), ('25.0', DOWN)]})
+        rows = espn.power_ranking_rows(league, week=2)
+        assert rows[0][2] == 0.0
+        assert round(rows[1][2], 1) == -50.0
+
+    def test_defaults_to_week_before_current(self):
+        league = FakePowerLeague({2: [('50.0', UP)]}, current_week=3)
+        assert len(espn.power_ranking_rows(league)) == 1
+
+    def test_text_report_still_matches_helper(self):
+        league = FakePowerLeague({1: [('50.0', UP), ('50.0', DOWN)],
+                                  2: [('50.0', UP), ('25.0', DOWN)]})
+        text = espn.get_power_rankings(league, week=2)
+        assert text.splitlines() == ['Power Rankings (Playoff %)',
+                                     '99.99[🟰 0.0%] (80.0) - UP',
+                                     '49.99[🔻50.0%] (20.5) - DN']
+
+
+class TestPowerRankingsTable:
+    def test_title_columns_and_rows(self):
+        league = FakePowerLeague({1: [('50.0', UP), ('50.0', DOWN)],
+                                  2: [('50.0', UP), ('25.0', DOWN)]})
+        t = tables.power_rankings_table(league, week=2)
+        assert t.title == 'Power Rankings'
+        assert t.headers == ['Rank', 'Team', 'Score', 'Change', 'Playoff %']
+        assert t.align == ['right', 'left', 'right', 'right', 'right']
+        assert t.rows == [['1', 'Climber', '99.99', '🟰0.0%', '80.0'],
+                          ['2', 'Faller', '49.99', '🔻50.0%', '20.5']]
+
+    def test_first_week_change_is_dash(self):
+        t = tables.power_rankings_table(FakePowerLeague({1: [('50.0', UP)]}), week=1)
+        assert t.rows[0][3] == '-'

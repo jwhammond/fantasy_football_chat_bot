@@ -631,6 +631,55 @@ def get_waiver_report(league, faab=False, scoring_period=None, test_date=None):
     return '\n'.join([f'Waiver Report {today}:'] + [block for _, block in entries])
 
 
+P_RANK_UP_EMOJI = "🟢"
+P_RANK_DOWN_EMOJI = "🔻"
+P_RANK_SAME_EMOJI = "🟰"
+
+
+def rank_change_emoji(change_percent):
+    if change_percent > 0:
+        return P_RANK_UP_EMOJI
+    if change_percent < 0:
+        return P_RANK_DOWN_EMOJI
+    return P_RANK_SAME_EMOJI
+
+
+def power_ranking_rows(league, week=None):
+    """
+    Compute the power rankings for a week with each team's change from the
+    week before.
+
+    Returns a list of (team, normalized_score, change_percent) in ranking
+    order. normalized_score is a string with two decimals, scaled so the top
+    team is "99.99". change_percent is a float, or None when there is no
+    previous week to compare against. Both the text and table power ranking
+    reports build from this.
+    """
+    if not week:
+        week = league.current_week - 1
+
+    current_rankings = league.power_rankings(week=week)
+    previous_rankings = league.power_rankings(week=week - 1) if week > 1 else []
+
+    def normalize_rankings(rankings):
+        if not rankings:
+            return []
+        max_score = max(float(score) for score, _ in rankings)
+        return [(f"{99.99 * float(score) / max_score:.2f}", team) for score, team in rankings]
+
+    normalized_current = normalize_rankings(current_rankings)
+    previous_by_abbrev = {team.team_abbrev: score for score, team in normalize_rankings(previous_rankings)}
+
+    rows = []
+    for score, team in normalized_current:
+        change = None
+        if team.team_abbrev in previous_by_abbrev:
+            previous = float(previous_by_abbrev[team.team_abbrev])
+            change = ((float(score) - previous) / previous) * 100
+        rows.append((team, score, change))
+    return rows
+
+
 def get_power_rankings(league, week=None):
     """
     This function returns the power rankings of the teams in the league for a specific week,
@@ -653,49 +702,17 @@ def get_power_rankings(league, week=None):
         A string representing the power rankings with changes from the previous week
     """
 
-    # Check if the week is provided, if not use the previous week
-    if not week:
-        week = league.current_week - 1
+    rows = power_ranking_rows(league, week=week)
 
-    p_rank_up_emoji = "🟢"
-    p_rank_down_emoji = "🔻"
-    p_rank_same_emoji = "🟰"
-
-    # Get the power rankings for the previous 2 weeks
-    current_rankings = league.power_rankings(week=week)
-    previous_rankings = league.power_rankings(week=week-1) if week > 1 else []
-
-    # Normalize the scores
-    def normalize_rankings(rankings):
-        if not rankings:
-            return []
-        max_score = max(float(score) for score, _ in rankings)
-        return [(f"{99.99 * float(score) / max_score:.2f}", team) for score, team in rankings]
-
-
-    normalized_current_rankings = normalize_rankings(current_rankings)
-    normalized_previous_rankings = normalize_rankings(previous_rankings)
-
-    # Convert normalized previous rankings to a dictionary for easy lookup
-    previous_rankings_dict = {team.team_abbrev: score for score, team in normalized_previous_rankings}
-
-    # Prepare the output string. Scores are padded to a common width so the
-    # columns after them stay aligned when a team's score drops below 10.
+    # Scores are padded to a common width so the columns after them stay
+    # aligned when a team's score drops below 10.
     rankings_text = ['Power Rankings (Playoff %)']
-    aligned_scores = util.align_scores([score for score, _ in normalized_current_rankings])
-    for (normalized_current_score, current_team), score_text in zip(normalized_current_rankings, aligned_scores):
-        team_abbrev = current_team.team_abbrev
+    aligned_scores = util.align_scores([score for _, score, _ in rows])
+    for (team, _, change), score_text in zip(rows, aligned_scores):
         rank_change_text = ''
-
-        # Check if the team was present in the normalized previous rankings
-        if team_abbrev in previous_rankings_dict:
-            previous_score = previous_rankings_dict[team_abbrev]
-            rank_change_percent = ((float(normalized_current_score) - float(previous_score)) / float(previous_score)) * 100
-            rank_change_emoji = p_rank_up_emoji if rank_change_percent > 0 else p_rank_down_emoji if rank_change_percent < 0 else p_rank_same_emoji
-            rank_change_text = f"[{rank_change_emoji}{abs(rank_change_percent):4.1f}%]"
-
-        rankings_text.append(f"{score_text}{rank_change_text} ({current_team.playoff_pct:4.1f}) - {team_abbrev}")
-
+        if change is not None:
+            rank_change_text = f"[{rank_change_emoji(change)}{abs(change):4.1f}%]"
+        rankings_text.append(f"{score_text}{rank_change_text} ({team.playoff_pct:4.1f}) - {team.team_abbrev}")
     return '\n'.join(rankings_text)
 
 
