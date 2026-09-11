@@ -49,24 +49,42 @@ def table_blocks(table):
     ]
 
 
-# Slack caps a section's text at 3000 characters. Code-block bodies are split
-# below this so the fence characters and title fit alongside them.
-SECTION_BODY_LIMIT = 2900
+# Slack caps a section's text at 3000 characters.
+SECTION_TEXT_LIMIT = 3000
 
 
 def _section(text):
     return {'type': 'section', 'text': {'type': 'mrkdwn', 'text': text}}
 
 
-def _chunk_lines(lines, limit):
-    """Group lines into chunks whose joined length stays within limit."""
+def _chunk_lines(lines, budget):
+    """Group lines into chunks that fit within budget, hard-splitting overlong lines.
+
+    Each chunk's joined length (lines plus newlines between them) must fit within
+    the budget. Lines longer than the budget are split at character boundaries.
+    """
     chunks, current, size = [], [], 0
     for line in lines:
-        if current and size + len(line) + 1 > limit:
+        # If this single line exceeds the budget, hard-split it.
+        if len(line) > budget:
+            # Flush current chunk first
+            if current:
+                chunks.append(current)
+                current, size = [], 0
+            # Split the overlong line into chunks that fit the budget
+            while len(line) > budget:
+                chunks.append([line[:budget]])
+                line = line[budget:]
+            # Remaining part (if any) goes into a new current chunk
+            if line:
+                current, size = [line], len(line)
+        # If adding this line would exceed budget (accounting for newline), start a new chunk
+        elif current and size + len(line) + 1 > budget:
             chunks.append(current)
-            current, size = [], 0
-        current.append(line)
-        size += len(line) + 1
+            current, size = [line], len(line)
+        else:
+            current.append(line)
+            size += len(line) + 1
     if current:
         chunks.append(current)
     return chunks
@@ -79,8 +97,67 @@ def text_blocks(text):
     if len(lines) == 1:
         return [_section(lines[0])]
     title, body = lines[0], lines[1:]
+
+    # Calculate budgets for body chunks accounting for title and fences
+    title_overhead = len(f'*{title}*\n')
+    fence_overhead = len('```\n') + len('\n```')
+    first_budget = SECTION_TEXT_LIMIT - title_overhead - fence_overhead
+    later_budget = SECTION_TEXT_LIMIT - fence_overhead
+
+    # Chunk body with dynamic budgets: first section uses first_budget, others use later_budget
     blocks = []
-    for index, chunk in enumerate(_chunk_lines(body, SECTION_BODY_LIMIT)):
-        code = '```\n' + '\n'.join(chunk) + '\n```'
-        blocks.append(_section(f'*{title}*\n{code}' if index == 0 else code))
+    current_chunk = []
+    current_size = 0
+    is_first_section = True
+
+    for line in body:
+        budget = first_budget if is_first_section else later_budget
+
+        # Hard-split any line that exceeds the budget
+        if len(line) > budget:
+            if current_chunk:
+                # Flush current chunk and switch to later budget if this was first section
+                code = '```\n' + '\n'.join(current_chunk) + '\n```'
+                if is_first_section:
+                    blocks.append(_section(f'*{title}*\n{code}'))
+                    is_first_section = False
+                else:
+                    blocks.append(_section(code))
+                current_chunk = []
+                current_size = 0
+                budget = later_budget  # Switch to later budget
+
+            # Split the overlong line
+            while len(line) > budget:
+                code = '```\n' + line[:budget] + '\n```'
+                blocks.append(_section(code))
+                line = line[budget:]
+
+            # Remaining part goes into new chunk
+            if line:
+                current_chunk = [line]
+                current_size = len(line)
+        # Normal line: check if it fits in current chunk
+        elif current_chunk and current_size + len(line) + 1 > budget:
+            # Flush current chunk
+            code = '```\n' + '\n'.join(current_chunk) + '\n```'
+            if is_first_section:
+                blocks.append(_section(f'*{title}*\n{code}'))
+                is_first_section = False
+            else:
+                blocks.append(_section(code))
+            current_chunk = [line]
+            current_size = len(line)
+        else:
+            current_chunk.append(line)
+            current_size += len(line) + 1
+
+    # Flush remaining chunk
+    if current_chunk:
+        code = '```\n' + '\n'.join(current_chunk) + '\n```'
+        if is_first_section:
+            blocks.append(_section(f'*{title}*\n{code}'))
+        else:
+            blocks.append(_section(code))
+
     return blocks

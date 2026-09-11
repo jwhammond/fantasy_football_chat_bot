@@ -90,3 +90,28 @@ class TestTextBlocks:
             assert all(line.startswith('line ') for line in body.strip('\n').split('\n'))
         joined = '\n'.join(b['text']['text'].split('```')[1].strip('\n') for b in blocks)
         assert joined.split('\n') == lines
+
+    def test_single_overlong_line_is_split_so_no_section_exceeds_cap(self):
+        blocks = fmt.text_blocks('Title\n' + 'x' * 7000)
+        assert len(blocks) >= 2
+        for block in blocks:
+            assert len(block['text']['text']) <= 3000
+        # Reconstruct the body from all blocks
+        body_parts = []
+        for i, block in enumerate(blocks):
+            text = block['text']['text']
+            if i == 0:
+                # First block has title and fences
+                code_part = text.split('```')[1].strip('\n')
+            else:
+                # Later blocks have just fences
+                code_part = text.split('```')[1].strip('\n')
+            body_parts.append(code_part)
+        assert ''.join(body_parts) == 'x' * 7000
+
+    def test_long_title_does_not_push_first_section_over_cap(self):
+        long_title = 'T' * 400
+        lines = [f'line {i:04d} ' + 'x' * 100 for i in range(60)]
+        blocks = fmt.text_blocks(long_title + '\n' + '\n'.join(lines))
+        assert all(len(b['text']['text']) <= 3000 for b in blocks)
+        assert blocks[0]['text']['text'].startswith('*' + long_title + '*\n```\n')
