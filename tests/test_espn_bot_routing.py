@@ -12,10 +12,12 @@ sys.path.insert(1, os.path.abspath('.'))
 
 import gamedaybot.espn.espn_bot as bot_module
 from gamedaybot.espn.tables import Table
+from gamedaybot.chat.slack import Slack
 
 
 class Recorder:
     def __init__(self, *args, **kwargs):
+        self.webhook_url = args[0] if args else None
         self.messages = []
         self.blocks = []
 
@@ -48,12 +50,15 @@ def bots(monkeypatch):
 
     def make(name):
         def factory(*args, **kwargs):
-            recorders[name] = Recorder()
+            recorders[name] = Recorder(*args, **kwargs)
             return recorders[name]
         return factory
 
+    slack_factory = make('slack')
+    slack_factory.UNSET = Slack.UNSET  # espn_bot.py checks Slack.UNSET on the module-level name
+
     monkeypatch.setattr(bot_module, 'GroupMe', make('groupme'))
-    monkeypatch.setattr(bot_module, 'Slack', make('slack'))
+    monkeypatch.setattr(bot_module, 'Slack', slack_factory)
     monkeypatch.setattr(bot_module, 'Discord', make('discord'))
     monkeypatch.setattr(bot_module, 'League', FakeLeague)
     return recorders
@@ -117,3 +122,90 @@ def test_nothing_sent_when_report_is_sentinel(bots, monkeypatch):
 
     assert bots['slack'].blocks == [] and bots['slack'].messages == []
     assert bots['groupme'].messages == []
+
+
+TABULAR_ROUTES = [
+    ('get_scoreboard_short', 'scoreboard_table', 'get_scoreboard_short'),
+    ('get_projected_scoreboard', 'projected_table', 'get_projected_scoreboard'),
+    ('get_close_scores', 'close_scores_table', 'get_close_scores'),
+    ('get_power_rankings', 'power_rankings_table', 'get_power_rankings'),
+    ('get_standings', 'standings_table', 'get_standings'),
+]
+
+
+@pytest.mark.parametrize('function, table_builder_name, text_builder_name', TABULAR_ROUTES)
+def test_tabular_route_sends_text_to_groupme_discord_and_table_to_slack(
+        bots, monkeypatch, function, table_builder_name, text_builder_name):
+    captured_text_kwargs = {}
+    captured_table_kwargs = {}
+
+    def fake_text_builder(league, **kw):
+        captured_text_kwargs.update(kw)
+        return 'Report Title\nline two'
+
+    def fake_table_builder(league, **kw):
+        captured_table_kwargs.update(kw)
+        return SAMPLE_TABLE
+
+    monkeypatch.setattr(bot_module.espn, 'fetch_box_scores', lambda league, week=None: ['box'])
+    # get_scoreboard_short appends a projected-scoreboard section to its text;
+    # stub it out so it doesn't try to read fields off the fake 'box' sentinel.
+    monkeypatch.setattr(bot_module.espn, 'get_projected_scoreboard', lambda league, **kw: 'unused')
+    monkeypatch.setattr(bot_module.espn, text_builder_name, fake_text_builder)
+    monkeypatch.setattr(bot_module.tables, table_builder_name, fake_table_builder)
+
+    bot_module.espn_bot(function)
+
+    expected_text = 'Report Title\nline two'
+    if function == 'get_scoreboard_short':
+        # get_scoreboard_short always appends the projected-scoreboard text.
+        expected_text = expected_text + '\n\nunused'
+    assert bots['groupme'].messages == [expected_text]
+    assert bots['discord'].messages == [expected_text]
+    assert bots['slack'].messages == []
+    (blocks, fallback), = bots['slack'].blocks
+    assert fallback == expected_text
+    assert [b['type'] for b in blocks] == ['section', 'table']
+
+    if function == 'get_close_scores':
+        assert captured_table_kwargs['threshold'] == captured_text_kwargs['threshold']
+
+
+def test_slack_rendering_failure_falls_back_to_text(bots, monkeypatch):
+    monkeypatch.setattr(bot_module.espn, 'fetch_box_scores', lambda league, week=None: ['box'])
+    monkeypatch.setattr(bot_module.espn, 'get_matchups', lambda league, **kw: 'Matchups\nA vs B')
+    monkeypatch.setattr(bot_module.espn, 'get_projected_scoreboard', lambda league, **kw: 'Approximate Projected Scores\nA 100.00 - 90.00 B')
+
+    def boom(league, **kw):
+        raise RuntimeError("rendering exploded")
+    monkeypatch.setattr(bot_module.tables, 'matchups_table', boom)
+
+    bot_module.espn_bot('get_matchups')
+
+    expected_text = 'Matchups\nA vs B\n\nApproximate Projected Scores\nA 100.00 - 90.00 B'
+    assert bots['groupme'].messages == [expected_text]
+    assert bots['discord'].messages == [expected_text]
+    assert bots['slack'].blocks == []
+    assert bots['slack'].messages == [expected_text]
+
+
+def test_slack_rendering_skipped_when_webhook_unset(bots, monkeypatch):
+    monkeypatch.delenv('SLACK_WEBHOOK_URL', raising=False)
+    monkeypatch.setattr(bot_module.espn, 'fetch_box_scores', lambda league, week=None: ['box'])
+    monkeypatch.setattr(bot_module.espn, 'get_matchups', lambda league, **kw: 'Matchups\nA vs B')
+    monkeypatch.setattr(bot_module.espn, 'get_projected_scoreboard', lambda league, **kw: 'Approximate Projected Scores\nA 100.00 - 90.00 B')
+
+    called = []
+
+    def fake_matchups_table(league, **kw):
+        called.append(True)
+        return SAMPLE_TABLE
+    monkeypatch.setattr(bot_module.tables, 'matchups_table', fake_matchups_table)
+
+    bot_module.espn_bot('get_matchups')
+
+    assert bots['slack'].webhook_url in Slack.UNSET
+    assert called == []
+    assert bots['slack'].blocks == []
+    expected_text = 'Matchups\nA vs B\n\nApproximate Projected Scores\nA 100.00 - 90.00 B'
+    assert bots['slack'].messages == [expected_text]
