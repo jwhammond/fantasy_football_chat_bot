@@ -115,3 +115,9 @@ class TestTextBlocks:
         blocks = fmt.text_blocks(long_title + '\n' + '\n'.join(lines))
         assert all(len(b['text']['text']) <= 3000 for b in blocks)
         assert blocks[0]['text']['text'].startswith('*' + long_title + '*\n```\n')
+
+    def test_title_stays_on_first_section_when_first_line_is_overlong(self):
+        blocks = fmt.text_blocks('Title\n' + 'x' * 7000)
+        assert blocks[0]['text']['text'].startswith('*Title*\n```\n')
+        assert all('*Title*' not in b['text']['text'] for b in blocks[1:])
+        assert all(len(b['text']['text']) <= 3000 for b in blocks)

@@ -57,36 +57,62 @@ def _section(text):
     return {'type': 'section', 'text': {'type': 'mrkdwn', 'text': text}}
 
 
-def _chunk_lines(lines, budget):
-    """Group lines into chunks that fit within budget, hard-splitting overlong lines.
+def _split_line(line, budget):
+    """Yield pieces of a line that each fit within the budget."""
+    while len(line) > budget:
+        yield line[:budget]
+        line = line[budget:]
+    if line:
+        yield line
 
-    Each chunk's joined length (lines plus newlines between them) must fit within
-    the budget. Lines longer than the budget are split at character boundaries.
+
+def _chunk_lines(lines, first_budget, later_budget):
+    """Group lines into chunks that fit within budgets, hard-splitting overlong lines.
+
+    The first chunk must fit first_budget; all later chunks must fit later_budget.
+    Each chunk's joined length (sum of line lengths plus newlines) is at most its budget.
+    A line longer than the current budget is hard-split at character boundaries.
     """
-    chunks, current, size = [], [], 0
+    chunks = []
+    current_chunk = []
+    current_size = 0
+    budget = first_budget
+
     for line in lines:
-        # If this single line exceeds the budget, hard-split it.
+        # Hard-split any line that exceeds the current budget
         if len(line) > budget:
-            # Flush current chunk first
-            if current:
-                chunks.append(current)
-                current, size = [], 0
-            # Split the overlong line into chunks that fit the budget
-            while len(line) > budget:
-                chunks.append([line[:budget]])
-                line = line[budget:]
-            # Remaining part (if any) goes into a new current chunk
-            if line:
-                current, size = [line], len(line)
-        # If adding this line would exceed budget (accounting for newline), start a new chunk
-        elif current and size + len(line) + 1 > budget:
-            chunks.append(current)
-            current, size = [line], len(line)
+            # Flush current chunk if any
+            if current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = []
+                current_size = 0
+                budget = later_budget
+
+            # Hard-split the overlong line into pieces
+            for piece in _split_line(line, budget):
+                # Check if this piece fits in the current chunk
+                if current_chunk and current_size + len(piece) + 1 > budget:
+                    chunks.append(current_chunk)
+                    current_chunk = [piece]
+                    current_size = len(piece)
+                else:
+                    current_chunk.append(piece)
+                    current_size += len(piece) + 1
+        # Normal line: check if it fits in current chunk
+        elif current_chunk and current_size + len(line) + 1 > budget:
+            # Flush current chunk and switch to later budget if this was the first
+            chunks.append(current_chunk)
+            budget = later_budget
+            current_chunk = [line]
+            current_size = len(line)
         else:
-            current.append(line)
-            size += len(line) + 1
-    if current:
-        chunks.append(current)
+            current_chunk.append(line)
+            current_size += len(line) + 1
+
+    # Flush remaining chunk
+    if current_chunk:
+        chunks.append(current_chunk)
+
     return chunks
 
 
@@ -104,58 +130,14 @@ def text_blocks(text):
     first_budget = SECTION_TEXT_LIMIT - title_overhead - fence_overhead
     later_budget = SECTION_TEXT_LIMIT - fence_overhead
 
-    # Chunk body with dynamic budgets: first section uses first_budget, others use later_budget
+    # Chunk the body lines
+    chunks = _chunk_lines(body, first_budget, later_budget)
+
+    # Render blocks: title on first chunk, code block on all chunks
     blocks = []
-    current_chunk = []
-    current_size = 0
-    is_first_section = True
-
-    for line in body:
-        budget = first_budget if is_first_section else later_budget
-
-        # Hard-split any line that exceeds the budget
-        if len(line) > budget:
-            if current_chunk:
-                # Flush current chunk and switch to later budget if this was first section
-                code = '```\n' + '\n'.join(current_chunk) + '\n```'
-                if is_first_section:
-                    blocks.append(_section(f'*{title}*\n{code}'))
-                    is_first_section = False
-                else:
-                    blocks.append(_section(code))
-                current_chunk = []
-                current_size = 0
-                budget = later_budget  # Switch to later budget
-
-            # Split the overlong line
-            while len(line) > budget:
-                code = '```\n' + line[:budget] + '\n```'
-                blocks.append(_section(code))
-                line = line[budget:]
-
-            # Remaining part goes into new chunk
-            if line:
-                current_chunk = [line]
-                current_size = len(line)
-        # Normal line: check if it fits in current chunk
-        elif current_chunk and current_size + len(line) + 1 > budget:
-            # Flush current chunk
-            code = '```\n' + '\n'.join(current_chunk) + '\n```'
-            if is_first_section:
-                blocks.append(_section(f'*{title}*\n{code}'))
-                is_first_section = False
-            else:
-                blocks.append(_section(code))
-            current_chunk = [line]
-            current_size = len(line)
-        else:
-            current_chunk.append(line)
-            current_size += len(line) + 1
-
-    # Flush remaining chunk
-    if current_chunk:
-        code = '```\n' + '\n'.join(current_chunk) + '\n```'
-        if is_first_section:
+    for index, chunk in enumerate(chunks):
+        code = '```\n' + '\n'.join(chunk) + '\n```'
+        if index == 0:
             blocks.append(_section(f'*{title}*\n{code}'))
         else:
             blocks.append(_section(code))
