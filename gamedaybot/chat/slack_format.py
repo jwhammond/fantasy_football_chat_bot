@@ -8,6 +8,8 @@ it accepts (raw_text cells only, no empty cells, 100 rows, 20 columns).
 
 MAX_TABLE_ROWS = 100      # including the header row
 MAX_TABLE_COLUMNS = 20
+# Intentionally duplicated in espn/tables.py: chat/ must not import espn/,
+# so the two modules cannot share this constant.
 EMPTY_CELL = '-'
 
 

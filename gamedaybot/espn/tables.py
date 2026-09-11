@@ -20,6 +20,8 @@ else:
 LEFT, RIGHT, CENTER = 'left', 'right', 'center'
 
 # Slack rejects empty table cells, so this stands in for "nothing here".
+# Intentionally duplicated in chat/slack_format.py: chat/ must not import
+# espn/, so the two modules cannot share this constant.
 EMPTY_CELL = '-'
 
 
@@ -58,6 +60,23 @@ def _projection_rows(played):
 
 
 def matchups_table(league, week=None, box_scores=None) -> Optional[Table]:
+    """
+    Build the current week's matchups as a Table of home/away teams and projections.
+
+    Parameters
+    ----------
+    league : espn_api.football.League
+        The league to build the table for.
+    week : int, optional
+        The week to build for. Defaults to the league's current week.
+    box_scores : list, optional
+        Pre-fetched box scores for the same week, to avoid a duplicate API call.
+
+    Returns
+    -------
+    Table or None
+        None when no box score has an away team (bye week or no data).
+    """
     played = _played_boxes(league, week, box_scores)
     if not played:
         return None
@@ -67,6 +86,29 @@ def matchups_table(league, week=None, box_scores=None) -> Optional[Table]:
 
 def scoreboard_table(league, week=None, box_scores=None, title='Score Update',
                      projected=True) -> Optional[Table]:
+    """
+    Build a scoreboard Table of home/away teams, scores, and optional projections.
+
+    Parameters
+    ----------
+    league : espn_api.football.League
+        The league to build the table for.
+    week : int, optional
+        The week to build for. Defaults to the league's current week.
+    box_scores : list, optional
+        Pre-fetched box scores for the same week, to avoid a duplicate API call.
+    title : str, optional
+        The table title. Defaults to "Score Update"; callers pass e.g.
+        "Final Score Update" for a completed week.
+    projected : bool, optional
+        Whether to include the Proj columns. False for a final report, where
+        projections are meaningless after the games are played.
+
+    Returns
+    -------
+    Table or None
+        None when no box score has an away team (bye week or no data).
+    """
     played = _played_boxes(league, week, box_scores)
     if not played:
         return None
@@ -88,6 +130,23 @@ def scoreboard_table(league, week=None, box_scores=None, title='Score Update',
 
 
 def projected_table(league, week=None, box_scores=None) -> Optional[Table]:
+    """
+    Build a Table of projected scores for the remaining games in a week.
+
+    Parameters
+    ----------
+    league : espn_api.football.League
+        The league to build the table for.
+    week : int, optional
+        The week to build for. Defaults to the league's current week.
+    box_scores : list, optional
+        Pre-fetched box scores for the same week, to avoid a duplicate API call.
+
+    Returns
+    -------
+    Table or None
+        None when no box score has an away team (bye week or no data).
+    """
     played = _played_boxes(league, week, box_scores)
     if not played:
         return None
@@ -98,6 +157,29 @@ def projected_table(league, week=None, box_scores=None) -> Optional[Table]:
 
 def close_scores_table(league, week=None, box_scores=None,
                        threshold=espn.CLOSE_SCORES_DEFAULT_THRESHOLD) -> Optional[Table]:
+    """
+    Build a Table of matchups whose projected point difference is within a threshold.
+
+    Uses the same close_matchups selection helper as the text builder, so the
+    two can never disagree about which matchups are "close".
+
+    Parameters
+    ----------
+    league : espn_api.football.League
+        The league to build the table for.
+    week : int, optional
+        The week to build for. Defaults to the league's current week.
+    box_scores : list, optional
+        Pre-fetched box scores for the same week, to avoid a duplicate API call.
+    threshold : float, optional
+        The largest projected point difference that still counts as close.
+        Defaults to CLOSE_SCORES_DEFAULT_THRESHOLD.
+
+    Returns
+    -------
+    Table or None
+        None when no matchup is within the threshold.
+    """
     if box_scores is None:
         box_scores = espn.fetch_box_scores(league, week=week)
     close = espn.close_matchups(box_scores, threshold)
@@ -110,12 +192,44 @@ def close_scores_table(league, week=None, box_scores=None,
 
 
 def standings_table(league) -> Table:
+    """
+    Build the current league standings as a Table ranked by league.standings().
+
+    Parameters
+    ----------
+    league : espn_api.football.League
+        The league to build the table for.
+
+    Returns
+    -------
+    Table
+        One row per team. Never returns None.
+    """
     rows = [[str(pos), f"{team.wins}-{team.losses}", _cell(team.team_name)]
             for pos, team in enumerate(league.standings(), start=1)]
     return Table('Current Standings', ['Rank', 'Record', 'Team'], rows, [RIGHT, CENTER, LEFT])
 
 
 def power_rankings_table(league, week=None) -> Table:
+    """
+    Build the power rankings as a Table of rank, team, normalized score, and week-over-week change.
+
+    Uses the same power_ranking_rows helper as the text builder, so the two
+    can never disagree about scores, ranks, or change percentages.
+
+    Parameters
+    ----------
+    league : espn_api.football.League
+        The league to build the table for.
+    week : int, optional
+        The week to rank. Defaults to the week before the league's current week.
+
+    Returns
+    -------
+    Table
+        One row per team, ranked highest score first. Never returns None; the
+        Change column is "-" for the first ranked week.
+    """
     rows = []
     for rank, (team, score, change) in enumerate(espn.power_ranking_rows(league, week=week), start=1):
         change_cell = EMPTY_CELL if change is None else f"{espn.rank_change_emoji(change)}{abs(change):.1f}%"

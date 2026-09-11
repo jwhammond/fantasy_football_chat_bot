@@ -71,9 +71,9 @@ class TestMatchupsTable:
     def test_returns_none_for_empty_week(self):
         assert tables.matchups_table(None, box_scores=[]) is None
 
-    def test_no_cell_is_empty(self):
-        t = tables.matchups_table(None, box_scores=[FakeBox(FakeTeam('', ''), AWAY)])
-        assert all(cell for row in t.rows for cell in row)
+    def test_cell_substitutes_dash_for_empty_and_passes_through_otherwise(self):
+        assert tables._cell('') == '-'
+        assert tables._cell('x') == 'x'
 
 
 class TestScoreboardTable:

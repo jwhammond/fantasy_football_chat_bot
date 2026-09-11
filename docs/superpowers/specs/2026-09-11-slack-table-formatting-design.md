@@ -102,6 +102,12 @@ New module `gamedaybot/chat/slack_format.py`, pure functions, no I/O.
 - Multiple lines: the first line becomes `*title*`, the remaining lines go in
   a fenced code block, in one `section` block. Column alignment in the text
   reports is preserved.
+- `MAX_TITLE_LENGTH = 200`: when the first line is longer than this, it is
+  not treated as a title (bolding it plus the fences could otherwise drive
+  the first section's budget to zero or negative). The entire escaped text,
+  first line included, is instead rendered as code-block body across
+  sections, with no bold line at all, using the later-section budget for
+  every section.
 
 Section text is limited to 3,000 characters by Slack. `text_blocks` splits
 the code-block body across multiple `section` blocks at line boundaries when
@@ -123,9 +129,10 @@ the body exceeds 2,900 characters, so long waiver reports still send.
 ### 4. Bot send path
 
 `gamedaybot/espn/espn_bot.py` currently builds a single `text`. It will build
-`text` exactly as today and, for the reports below, also `slack_blocks`.
+`text` exactly as today and, for the reports below, also a `slack_builder`
+zero-arg callable that produces the blocks below when called.
 
-| Function | `slack_blocks` |
+| Function | `slack_builder()` result |
 |---|---|
 | `get_matchups` | `table_blocks(matchups_table(...))` |
 | `get_scoreboard_short` | `table_blocks(scoreboard_table(...))` (one table, scores and projections together) |
@@ -136,30 +143,61 @@ the body exceeds 2,900 characters, so long waiver reports still send.
 | `get_final` | `table_blocks(scoreboard_table(..., title="Final Score Update", projected=False))` + `text_blocks(trophies)` (projections are meaningless after the games are played) |
 | everything else | not set |
 
+For each tabular report, the dispatch phase sets a `slack_builder`, a
+zero-argument callable returning a list of blocks (or `None`), instead of
+building the blocks eagerly:
+
+```python
+elif function == "get_matchups":
+    box_scores = espn.fetch_box_scores(league)
+    text = espn.get_matchups(league, box_scores=box_scores)
+    if text != util.NO_MATCHUP_DATA:
+        text = text + "\n\n" + espn.get_projected_scoreboard(league, box_scores=box_scores)
+    slack_builder = lambda: _slack_blocks(tables.matchups_table(league, box_scores=box_scores))
+```
+
 Sending:
 
 ```python
-messages = util.str_limit_check(text, str_limit)
-for message in messages:
-    groupme_bot.send_message(message)
-    discord_bot.send_message(message)
-if slack_blocks:
-    slack_bot.send_blocks(slack_blocks, fallback=text)
-else:
+if util.has_sendable_content(text):
+    logger.debug(text)
+    messages = util.str_limit_check(text, str_limit)
     for message in messages:
-        slack_bot.send_message(message)
+        groupme_bot.send_message(message)
+        discord_bot.send_message(message)
+
+    slack_blocks = None
+    if slack_builder is not None and slack_bot.webhook_url not in Slack.UNSET:
+        try:
+            slack_blocks = slack_builder()
+        except Exception:
+            logger.exception("Slack table rendering failed; sending the text report instead")
+    if slack_blocks:
+        slack_bot.send_blocks(slack_blocks, fallback=text)
+    else:
+        slack_bot.send_message(text)
 ```
 
 The `has_sendable_content(text)` gate stays as the single decision for
-whether anything is sent; `slack_blocks` is only built when a table builder
-returned a `Table`, and a `None` table means `text` is the sentinel anyway.
+whether anything is sent; `slack_builder` is only set when a report has a
+table, and a `None` table (built lazily, inside the try/except above) means
+`text` is the sentinel anyway.
 
 ## Error handling
 
 - A `None` from a table builder is not an error; it mirrors the text sentinel.
-- `table_blocks` raising `ValueError` on oversize tables surfaces in the
-  scheduler job log like any other exception; GroupMe and Discord sends happen
-  first, so a Slack rendering problem never blocks the other platforms.
+- Slack blocks are built lazily, only after the GroupMe and Discord sends
+  have already gone out, inside a `try`/`except` around `slack_builder()`
+  that logs and falls back to sending the plain text report to Slack. A
+  `ValueError` from `table_blocks` on an oversize table, or any other
+  exception from a table builder, is caught there: it never blocks or
+  delays GroupMe and Discord, and Slack still gets something.
+- Slack rendering is skipped entirely (no builder call at all) when the
+  Slack webhook is unset (`Slack.UNSET`: `1`, `"1"`, `""`).
+- Slack receives the whole text report unchunked in one `send_message`
+  call, never split by `str_limit_check`: `text_blocks` enforces Slack's own
+  3,000-character section cap itself, and chunking would give every chunk
+  after the first a bogus bold "title" line.
 - Slack `invalid_blocks` still raises `SlackException` with the response body.
 
 ## Testing
