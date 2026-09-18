@@ -130,6 +130,51 @@ def _chunk_lines(lines, first_budget, later_budget):
     return chunks
 
 
+def list_blocks(labeled):
+    """A bold title section followed by the label/value pairs of a LabeledList.
+
+    Each item renders as its bold label over its value, as proportional text
+    rather than the monospace code block text_blocks falls back to. Items are
+    packed into as few sections as Slack's per-section character cap allows,
+    and a label is never separated from its value: an item that would overflow
+    the current section starts a new one. An item too large for a section of
+    its own is hard-split, which only a malformed report could produce.
+
+    Parameters
+    ----------
+    labeled : gamedaybot.espn.tables.LabeledList
+        The title and (label, value) pairs to render.
+
+    Returns
+    -------
+    list of dict
+        Block Kit blocks: the title section, then one section per chunk of
+        items. A LabeledList with no items renders as the title alone.
+    """
+    blocks = [_title_section(labeled.title)]
+
+    pieces = []
+    for label, value in labeled.items:
+        piece = f'*{escape(label)}*\n{escape(value)}'
+        # An item wider than a whole section cannot be packed; split it so the
+        # payload stays valid rather than letting Slack reject the message.
+        pieces.extend(_split_line(piece, SECTION_TEXT_LIMIT)
+                      if len(piece) > SECTION_TEXT_LIMIT else [piece])
+
+    current, size = [], 0
+    for piece in pieces:
+        if current and size + len(piece) + 1 > SECTION_TEXT_LIMIT:
+            blocks.append(_section('\n'.join(current)))
+            current, size = [piece], len(piece)
+        else:
+            current.append(piece)
+            size += len(piece) + 1
+    if current:
+        blocks.append(_section('\n'.join(current)))
+
+    return blocks
+
+
 def text_blocks(text):
     """Render a text report: a lone line as plain text, otherwise a bold title
     over a code block that preserves the report's column alignment.

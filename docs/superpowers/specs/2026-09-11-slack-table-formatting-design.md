@@ -9,6 +9,13 @@ Slack messages from the bot should use Slack's native table block for the
 tabular reports, and bold titles for everything else, instead of one grey
 code block. GroupMe and Discord output must not change.
 
+**Update 2026-09-18:** the remaining code-block reports were given structured
+builders too. The monitor, waiver and win-matrix reports became tables; the
+trophies became a `LabeledList` rendered by `list_blocks`, because their
+values are sentences of very different lengths and read worse as a third
+wrapped column than as bold labels over their values. Only `trophy_recap`,
+`broadcast` and `init` still fall back to `text_blocks`.
+
 ## Verified constraints (probed against the live webhook on 2026-09-11)
 
 - Incoming webhooks accept Block Kit `table` blocks. Slack's docs only mention
@@ -95,6 +102,19 @@ New module `gamedaybot/chat/slack_format.py`, pure functions, no I/O.
    Any empty cell string is replaced by `"-"` as a last line of defence.
    Raises `ValueError` when rows exceed 100 or columns exceed 20.
 
+`list_blocks(labeled: LabeledList) -> list[dict]` renders a titled run of
+label/value pairs:
+
+1. A `section` block with `mrkdwn` text `*{title}*`.
+2. One or more `section` blocks, each holding as many items as fit, every
+   item rendered as `*{label}*\n{value}` with both escaped. Items are packed
+   so a label is never separated from its value: an item that would overflow
+   the current section starts a new one. An item too large for a section of
+   its own is hard-split, which only a malformed report could produce.
+
+Unlike `text_blocks` this uses no code fences, so the text renders
+proportionally.
+
 `text_blocks(text: str) -> list[dict]` renders a text report:
 
 - Single line: one `section` block with the escaped text as `mrkdwn`, no
@@ -140,8 +160,12 @@ zero-arg callable that produces the blocks below when called.
 | `get_close_scores` | `table_blocks(close_scores_table(...))` |
 | `get_standings` | `table_blocks(...)` per Table from `standings_tables(...)`, concatenated, + `text_blocks(standings_legend(league))` (the legend is `''` for a league without divisions) |
 | `get_power_rankings` | `table_blocks(power_rankings_table(...))` |
-| `get_final` | `table_blocks(scoreboard_table(..., title="Final Score Update", projected=False))` + `text_blocks(trophies)` (projections are meaningless after the games are played) |
-| everything else | not set |
+| `get_final` | `table_blocks(scoreboard_table(..., title="Final Score Update", projected=False))` + `list_blocks(trophies_list(...))` (projections are meaningless after the games are played) |
+| `get_monitor` | `table_blocks(monitor_table(...))` — Team / Player / Status |
+| `get_trophies` | `list_blocks(trophies_list(...))` — bold award labels over their winners |
+| `get_waiver_report` | `table_blocks(waiver_table(...))` — Team / Move / Pos / Player, plus FAAB in a FAAB league |
+| `win_matrix` | `table_blocks(win_matrix_table(...))` — Rank / Team / Record |
+| everything else (`trophy_recap`, `broadcast`, `init`) | not set |
 
 For each tabular report, the dispatch phase sets a `slack_builder`, a
 zero-argument callable returning a list of blocks (or `None`), instead of

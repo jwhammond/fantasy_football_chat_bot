@@ -280,3 +280,124 @@ class TestPowerRankingsTable:
     def test_first_week_change_is_dash(self):
         t = tables.power_rankings_table(FakePowerLeague({1: [('50.0', UP)]}), week=1)
         assert t.rows[0][3] == '-'
+
+
+class MonitorPlayer:
+    """One lineup slot as monitor_roster reads it: a healthy starter by default."""
+
+    def __init__(self, name='Someone', position='QB', slot_position='QB',
+                 injuryStatus='ACTIVE', on_bye_week=False, projected_points=10.0,
+                 game_played=0):
+        self.name = name
+        self.position = position
+        self.slot_position = slot_position
+        self.injuryStatus = injuryStatus
+        self.on_bye_week = on_bye_week
+        self.projected_points = projected_points
+        self.game_played = game_played
+
+
+class MonitorBox:
+    def __init__(self, home, home_lineup, away=None, away_lineup=None):
+        self.home_team = home
+        self.home_lineup = home_lineup
+        self.away_team = away
+        self.away_lineup = away_lineup or []
+
+
+class TestMonitorTable:
+    def test_none_when_nobody_is_flagged(self):
+        box = MonitorBox(HOME, [MonitorPlayer()], AWAY, [MonitorPlayer()])
+        assert tables.monitor_table(None, box_scores=[box]) is None
+
+    def test_title_and_columns(self):
+        box = MonitorBox(HOME, [MonitorPlayer(injuryStatus='QUESTIONABLE')])
+        t = tables.monitor_table(None, box_scores=[box])
+        assert t.title == 'Starting Players to Monitor'
+        assert t.headers == ['Team', 'Player', 'Status']
+
+    def test_row_is_team_player_and_reason(self):
+        box = MonitorBox(HOME, [MonitorPlayer(name='Rome Odunze', position='WR',
+                                              slot_position='WR', injuryStatus='QUESTIONABLE')])
+        t = tables.monitor_table(None, box_scores=[box])
+        assert t.rows == [['The Rising Cost of Living', 'WR Rome Odunze', 'Questionable']]
+
+    def test_covers_both_sides_of_a_matchup(self):
+        box = MonitorBox(HOME, [MonitorPlayer(injuryStatus='OUT')],
+                         AWAY, [MonitorPlayer(on_bye_week=True)])
+        rows = tables.monitor_table(None, box_scores=[box]).rows
+        assert [row[0] for row in rows] == ['The Rising Cost of Living', 'Studio Gibbsli']
+        assert [row[2] for row in rows] == ['Out', 'BYE']
+
+    def test_bye_box_with_no_away_team_does_not_crash(self):
+        box = MonitorBox(HOME, [MonitorPlayer(injuryStatus='OUT')], None, [])
+        assert tables.monitor_table(None, box_scores=[box]).rows == [
+            ['The Rising Cost of Living', 'QB Someone', 'Out']]
+
+    def test_matches_the_text_builder_on_who_is_flagged(self):
+        lineup = [MonitorPlayer(name='A', injuryStatus='QUESTIONABLE'),
+                  MonitorPlayer(name='B'),
+                  MonitorPlayer(name='C', projected_points=0)]
+        box = MonitorBox(HOME, lineup)
+        text = espn.get_monitor(None, box_scores=[box])
+        rows = tables.monitor_table(None, box_scores=[box]).rows
+        assert [row[1] for row in rows] == ['QB A', 'QB C']
+        assert 'QB B' not in text
+
+
+class TestTrophiesList:
+    def test_none_when_nothing_was_played(self, monkeypatch):
+        monkeypatch.setattr(espn, 'trophy_pairs', lambda league, **kw: None)
+        assert tables.trophies_list(None) is None
+
+    def test_title_and_pairs_come_from_trophy_pairs(self, monkeypatch):
+        pairs = [('👑 High score 👑', 'A with 100.00 points')]
+        monkeypatch.setattr(espn, 'trophy_pairs', lambda league, **kw: pairs)
+        result = tables.trophies_list(None)
+        assert result.title == espn.TROPHY_TITLE
+        assert result.items == pairs
+
+
+class TestWaiverTable:
+    def moves(self, monkeypatch, entries, today='2026-09-16'):
+        monkeypatch.setattr(espn, 'waiver_moves', lambda league, **kw: (today, entries))
+
+    def test_none_when_no_claims_executed(self, monkeypatch):
+        self.moves(monkeypatch, [])
+        assert tables.waiver_table(None, faab=True) is None
+
+    def test_title_carries_the_report_date(self, monkeypatch):
+        self.moves(monkeypatch, [('A', [('ADDED', 'WR', 'X', '$5')])])
+        assert tables.waiver_table(None, faab=True).title == 'Waiver Report 2026-09-16'
+
+    def test_one_row_per_move_with_the_faab_column(self, monkeypatch):
+        self.moves(monkeypatch, [('PAIN TRAIN', [('ADDED', 'WR', 'Jalen Coker', '$37, won by $23'),
+                                                 ('DROPPED', 'WR', 'Makai Lemon', '')])])
+        t = tables.waiver_table(None, faab=True)
+        assert t.headers == ['Team', 'Move', 'Pos', 'Player', 'FAAB']
+        assert t.rows == [['PAIN TRAIN', 'ADDED', 'WR', 'Jalen Coker', '$37, won by $23'],
+                          ['PAIN TRAIN', 'DROPPED', 'WR', 'Makai Lemon', tables.EMPTY_CELL]]
+
+    def test_faab_column_omitted_in_a_non_faab_league(self, monkeypatch):
+        self.moves(monkeypatch, [('A', [('ADDED', 'WR', 'X', '')])])
+        t = tables.waiver_table(None, faab=False)
+        assert t.headers == ['Team', 'Move', 'Pos', 'Player']
+        assert t.rows == [['A', 'ADDED', 'WR', 'X']]
+
+    def test_no_cell_is_ever_empty(self, monkeypatch):
+        self.moves(monkeypatch, [('A', [('DROPPED', '', '', '')])])
+        assert all(cell for row in tables.waiver_table(None, faab=True).rows for cell in row)
+
+
+class TestWinMatrixTable:
+    def test_none_for_a_league_with_no_teams(self, monkeypatch):
+        monkeypatch.setattr(tables.recap, 'win_matrix_records', lambda league: [])
+        assert tables.win_matrix_table(None) is None
+
+    def test_ranks_rows_in_record_order(self, monkeypatch):
+        monkeypatch.setattr(tables.recap, 'win_matrix_records',
+                            lambda league: [('BigK', 9, 2), ('CAM', 4, 7)])
+        t = tables.win_matrix_table(None)
+        assert t.title == tables.recap.WIN_MATRIX_TITLE
+        assert t.headers == ['Rank', 'Team', 'Record']
+        assert t.rows == [['1', 'BigK', '9-2'], ['2', 'CAM', '4-7']]

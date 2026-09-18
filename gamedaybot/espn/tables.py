@@ -1,21 +1,25 @@
-"""Structured (row/column) versions of the bot's tabular reports.
+"""Structured versions of the bot's reports.
 
 The text builders in functionality.py return preformatted strings for chat
 platforms that only render monospace text. Slack can render real tables, so
 these builders return a Table that gamedaybot.chat.slack_format turns into
-Block Kit blocks. They return None exactly when the matching text builder
-would return its "nothing to send" sentinel.
+Block Kit blocks. A report whose rows are not really columnar returns a
+LabeledList instead, rendered as bold labels over their values. Both return
+None exactly when the matching text builder would return its "nothing to
+send" sentinel.
 """
 import os
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 if os.environ.get("AWS_EXECUTION_ENV") is not None:
     import espn.functionality as espn
+    import espn.season_recap as recap
 else:
     import sys
     sys.path.insert(1, os.path.abspath('.'))
     import gamedaybot.espn.functionality as espn
+    import gamedaybot.espn.season_recap as recap
 
 LEFT, RIGHT, CENTER = 'left', 'right', 'center'
 
@@ -31,6 +35,19 @@ class Table:
     headers: List[str]
     rows: List[List[str]]
     align: List[str]
+
+
+@dataclass
+class LabeledList:
+    """A titled run of label/value pairs, for reports that are not tables.
+
+    The trophies read as a list of awards, not as rows: every value is a
+    sentence of its own length ("171.30 points" beside "left 27.10 points on
+    their bench..."), so a third table column would wrap badly. Rendered by
+    gamedaybot.chat.slack_format.list_blocks as bold labels over their values.
+    """
+    title: str
+    items: List[Tuple[str, str]]
 
 
 def _cell(value) -> str:
@@ -256,3 +273,143 @@ def power_rankings_table(league, week=None) -> Table:
         rows.append([str(rank), _cell(team.team_name), score, change_cell, f"{team.playoff_pct:.1f}"])
     return Table('Power Rankings', ['Rank', 'Team', 'Score', 'Change', 'Playoff %'], rows,
                  [RIGHT, LEFT, RIGHT, RIGHT, RIGHT])
+
+
+def monitor_table(league, box_scores=None) -> Optional[Table]:
+    """
+    Build the starters worth watching as a Table of team, player, and status.
+
+    Shares monitor_roster with the text builder, so the two can never disagree
+    about who is flagged or why.
+
+    Parameters
+    ----------
+    league : espn_api.football.League
+        The league to build the table for.
+    box_scores : list, optional
+        Pre-fetched box scores for the current week, to avoid a duplicate API call.
+
+    Returns
+    -------
+    Table or None
+        None when no starter is flagged -- the case where the text builder
+        reports "No Players to Monitor this week".
+    """
+    if box_scores is None:
+        box_scores = espn.fetch_box_scores(league)
+
+    rows = []
+    for box in box_scores:
+        # A bye leaves away_team None; its lineup flags nobody, but reading
+        # team_name off it would still crash.
+        for team, lineup in ((box.home_team, box.home_lineup), (box.away_team, box.away_lineup)):
+            if team is None:
+                continue
+            for player, reason in espn.monitor_roster(lineup):
+                rows.append([_cell(team.team_name), _cell(player), _cell(reason)])
+
+    if not rows:
+        return None
+    return Table('Starting Players to Monitor', ['Team', 'Player', 'Status'], rows,
+                 [LEFT, LEFT, LEFT])
+
+
+def trophies_list(league, week=None, box_scores=None) -> Optional[LabeledList]:
+    """
+    Build the week's trophies as a LabeledList of award labels and winners.
+
+    Shares trophy_pairs with the text builder, so the two can never disagree
+    about which trophies were won.
+
+    Parameters
+    ----------
+    league : espn_api.football.League
+        The league to build the list for.
+    week : int, optional
+        The week to award for. Defaults to the week before the current week.
+    box_scores : list, optional
+        Pre-fetched box scores for the same week, to avoid a duplicate API call.
+
+    Returns
+    -------
+    LabeledList or None
+        None for a week with nothing played -- the case where the text builder
+        returns its NO_TROPHY_DATA sentinel.
+    """
+    pairs = espn.trophy_pairs(league, week=week, box_scores=box_scores)
+    if not pairs:
+        return None
+    return LabeledList(espn.TROPHY_TITLE, pairs)
+
+
+def waiver_table(league, faab=False, scoring_period=None, test_date=None) -> Optional[Table]:
+    """
+    Build the day's executed waiver claims as a Table, one row per move.
+
+    Shares waiver_moves with the text builder, so the two can never disagree
+    about which claims are reported or in what order. The FAAB column is
+    omitted entirely in a league that does not use FAAB.
+
+    Parameters
+    ----------
+    league : espn_api.football.League
+        The league to build the table for.
+    faab : bool, optional
+        If True, include the FAAB column and sort by FAAB descending.
+    scoring_period : int, optional
+        The scoring period to query. Defaults to league.scoringPeriodId.
+    test_date : str, optional
+        Date string (YYYY-MM-DD) to simulate 'today'. Defaults to today.
+
+    Returns
+    -------
+    Table or None
+        None when no claim was executed on the report date -- the case where
+        the text builder returns ''.
+    """
+    today, entries = espn.waiver_moves(league, faab=faab, scoring_period=scoring_period,
+                                       test_date=test_date)
+    if not entries:
+        return None
+
+    rows = []
+    for team_name, moves in entries:
+        for action, position, player, detail in moves:
+            row = [_cell(team_name), action, _cell(position), _cell(player)]
+            if faab:
+                # Only an add carries a bid; a drop's cell would otherwise be empty.
+                row.append(_cell(detail))
+            rows.append(row)
+
+    headers = ['Team', 'Move', 'Pos', 'Player']
+    align = [LEFT, LEFT, LEFT, LEFT]
+    if faab:
+        headers.append('FAAB')
+        align.append(LEFT)
+    return Table(f'Waiver Report {today}', headers, rows, align)
+
+
+def win_matrix_table(league) -> Optional[Table]:
+    """
+    Build the everyone-played-everyone standings as a Table.
+
+    Shares win_matrix_records with the text builder, so the two can never
+    disagree about the ordering.
+
+    Parameters
+    ----------
+    league : espn_api.football.League
+        The league to build the table for.
+
+    Returns
+    -------
+    Table or None
+        None for a league with no teams.
+    """
+    records = recap.win_matrix_records(league)
+    if not records:
+        return None
+    rows = [[str(rank), _cell(abbrev), f'{wins}-{losses}']
+            for rank, (abbrev, wins, losses) in enumerate(records, start=1)]
+    return Table(recap.WIN_MATRIX_TITLE, ['Rank', 'Team', 'Record'], rows,
+                 [RIGHT, LEFT, RIGHT])

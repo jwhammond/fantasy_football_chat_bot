@@ -6,7 +6,8 @@ if os.environ.get("AWS_EXECUTION_ENV") is not None:
     from chat.slack import Slack
     from chat.discord import Discord
     import espn.tables as tables
-    from chat.slack_format import table_blocks, text_blocks
+    from chat.slack_format import table_blocks, text_blocks, list_blocks
+    from espn.tables import LabeledList
 else:
     # For local use
     import sys
@@ -19,7 +20,8 @@ else:
     import gamedaybot.espn.functionality as espn
     import gamedaybot.espn.season_recap as recap
     import gamedaybot.espn.tables as tables
-    from gamedaybot.chat.slack_format import table_blocks, text_blocks
+    from gamedaybot.chat.slack_format import table_blocks, text_blocks, list_blocks
+    from gamedaybot.espn.tables import LabeledList
 
 
 from espn_api.football import League
@@ -33,33 +35,40 @@ logger.setLevel(logging.DEBUG)
 
 def _slack_blocks(table, extra_text=None):
     """
-    Render a Table (and optional trailing text report) as Slack blocks.
+    Render a Table or LabeledList (and optional trailing text report) as Slack blocks.
 
     Parameters
     ----------
-    table : gamedaybot.espn.tables.Table, list of Table, or None
-        The table to render, or several to render one after another (the
-        standings send one per division). None mirrors the "nothing to send"
-        sentinel used by the text builders.
+    table : Table, LabeledList, list of either, or None
+        The report to render, or several to render one after another (the
+        standings send one per division; the final report sends a score table
+        followed by the trophy list). None mirrors the "nothing to send"
+        sentinel used by the text builders, and Nones inside a list are
+        dropped so one absent section does not lose the others.
     extra_text : str, optional
         A text report to append after the table, rendered with text_blocks
-        (e.g. trophies following the final score table, or the standings'
-        playoff-marker legend).
+        (e.g. the standings' playoff-marker legend).
 
     Returns
     -------
     list of dict, or None
-        The Block Kit blocks, or None when table is None or an empty list.
+        The Block Kit blocks, or None when nothing renderable was given.
     """
     if table is None:
         return None
     all_tables = table if isinstance(table, list) else [table]
+    all_tables = [one for one in all_tables if one is not None]
     if not all_tables:
         return None
-    blocks = [block for one in all_tables for block in table_blocks(one)]
+    blocks = [block for one in all_tables for block in _render(one)]
     if extra_text:
         blocks = blocks + text_blocks(extra_text)
     return blocks
+
+
+def _render(report):
+    """Render one structured report with the builder that matches its shape."""
+    return list_blocks(report) if isinstance(report, LabeledList) else table_blocks(report)
 
 
 def espn_bot(function):
@@ -200,7 +209,9 @@ def espn_bot(function):
             text = text + "\n\n" + espn.get_projected_scoreboard(league, box_scores=box_scores)
         slack_builder = lambda: _slack_blocks(tables.matchups_table(league, box_scores=box_scores))
     elif function == "get_monitor":
-        text = espn.get_monitor(league)
+        box_scores = espn.fetch_box_scores(league)
+        text = espn.get_monitor(league, box_scores=box_scores)
+        slack_builder = lambda: _slack_blocks(tables.monitor_table(league, box_scores=box_scores))
     elif function == "get_scoreboard_short":
         box_scores = espn.fetch_box_scores(league)
         text = espn.get_scoreboard_short(league, box_scores=box_scores)
@@ -220,13 +231,17 @@ def espn_bot(function):
         text = espn.get_power_rankings(league)
         slack_builder = lambda: _slack_blocks(tables.power_rankings_table(league))
     elif function == "get_trophies":
-        text = espn.get_trophies(league)
+        week = league.current_week - 1
+        box_scores = espn.fetch_box_scores(league, week=week)
+        text = espn.get_trophies(league, week=week, box_scores=box_scores)
+        slack_builder = lambda: _slack_blocks(tables.trophies_list(league, week=week, box_scores=box_scores))
     elif function == "get_standings":
         text = espn.get_standings(league)
         slack_builder = lambda: _slack_blocks(tables.standings_tables(league),
                                               extra_text=espn.standings_legend(league))
     elif function == "win_matrix":
         text = recap.win_matrix(league)
+        slack_builder = lambda: _slack_blocks(tables.win_matrix_table(league))
     elif function == "trophy_recap":
         text = recap.trophy_recap(league)
         # groupme_bot.send_message(text, file_path='/tmp/season_recap.png')
@@ -244,12 +259,13 @@ def espn_bot(function):
             text = "Final " + scores
             text = text + "\n\n" + trophies
             slack_builder = lambda: _slack_blocks(
-                tables.scoreboard_table(league, week=week, box_scores=box_scores,
-                                        title="Final Score Update", projected=False),
-                trophies)
+                [tables.scoreboard_table(league, week=week, box_scores=box_scores,
+                                         title="Final Score Update", projected=False),
+                 tables.trophies_list(league, week=week, box_scores=box_scores)])
     elif function == "get_waiver_report":
         faab = league.settings.faab
         text = espn.get_waiver_report(league, faab)
+        slack_builder = lambda: _slack_blocks(tables.waiver_table(league, faab))
     elif function == "broadcast":
         try:
             text = broadcast_message
