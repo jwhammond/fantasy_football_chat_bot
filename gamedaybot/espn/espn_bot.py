@@ -37,21 +37,26 @@ def _slack_blocks(table, extra_text=None):
 
     Parameters
     ----------
-    table : gamedaybot.espn.tables.Table or None
-        The table to render. None mirrors the "nothing to send" sentinel used
-        by the text builders.
+    table : gamedaybot.espn.tables.Table, list of Table, or None
+        The table to render, or several to render one after another (the
+        standings send one per division). None mirrors the "nothing to send"
+        sentinel used by the text builders.
     extra_text : str, optional
         A text report to append after the table, rendered with text_blocks
-        (e.g. trophies following the final score table).
+        (e.g. trophies following the final score table, or the standings'
+        playoff-marker legend).
 
     Returns
     -------
     list of dict, or None
-        The Block Kit blocks, or None when table is None.
+        The Block Kit blocks, or None when table is None or an empty list.
     """
     if table is None:
         return None
-    blocks = table_blocks(table)
+    all_tables = table if isinstance(table, list) else [table]
+    if not all_tables:
+        return None
+    blocks = [block for one in all_tables for block in table_blocks(one)]
     if extra_text:
         blocks = blocks + text_blocks(extra_text)
     return blocks
@@ -218,7 +223,8 @@ def espn_bot(function):
         text = espn.get_trophies(league)
     elif function == "get_standings":
         text = espn.get_standings(league)
-        slack_builder = lambda: _slack_blocks(tables.standings_table(league))
+        slack_builder = lambda: _slack_blocks(tables.standings_tables(league),
+                                              extra_text=espn.standings_legend(league))
     elif function == "win_matrix":
         text = recap.win_matrix(league)
     elif function == "trophy_recap":

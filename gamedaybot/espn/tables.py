@@ -191,23 +191,43 @@ def close_scores_table(league, week=None, box_scores=None,
                  [LEFT, RIGHT, LEFT, RIGHT])
 
 
-def standings_table(league) -> Table:
+def standings_tables(league) -> List[Table]:
     """
-    Build the current league standings as a Table ranked by league.standings().
+    Build the current league standings as one Table per division.
+
+    Shares division_standings with the text builder, so the two can never
+    disagree about grouping, ranks, or which teams hold a playoff spot. The
+    playoff marker rides on the team cell rather than a column of its own,
+    which would leave every non-playoff row filled with EMPTY_CELL.
 
     Parameters
     ----------
     league : espn_api.football.League
-        The league to build the table for.
+        The league to build the tables for.
 
     Returns
     -------
-    Table
-        One row per team. Never returns None.
+    list of Table
+        One Table per division, ranked within the division, in the order the
+        divisions appear in the standings. A league without divisions gets a
+        single unmarked Table titled 'Current Standings'. Never empty.
     """
-    rows = [[str(pos), f"{team.wins}-{team.losses}", _cell(team.team_name)]
-            for pos, team in enumerate(league.standings(), start=1)]
-    return Table('Current Standings', ['Rank', 'Record', 'Team'], rows, [RIGHT, CENTER, LEFT])
+    return [Table(f"Current Standings - {division_name}" if division_name else 'Current Standings',
+                  ['Rank', 'Record', 'Team'],
+                  [[str(pos), f"{team.wins}-{team.losses}", _marked_team(team, marker)]
+                   for pos, team, marker in rows],
+                  [RIGHT, CENTER, LEFT])
+            for division_name, rows in espn.division_standings(league)]
+
+
+def _marked_team(team, marker) -> str:
+    """The team's name with its playoff marker, if it holds a playoff spot.
+
+    Names are stripped first: ESPN hands back some with trailing whitespace,
+    which would otherwise double up the space in front of the marker.
+    """
+    name = _cell(team.team_name.strip())
+    return f"{name} {marker}" if marker else name
 
 
 def power_rankings_table(league, week=None) -> Table:

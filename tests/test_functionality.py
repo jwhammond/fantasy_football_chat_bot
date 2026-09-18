@@ -1,4 +1,5 @@
 from datetime import datetime
+from types import SimpleNamespace
 import sys
 import os
 sys.path.insert(1, os.path.abspath('.'))
@@ -446,3 +447,157 @@ class TestFaabBidCallout:
 
     def test_faab_callout_negative_margin_guarded(self):
         assert utils.faab_bid_callout(5, 9, 'Rival') == ''
+
+
+class FakeStandingsTeam:
+    """Stands in for an espn_api Team as league.standings() returns it."""
+
+    def __init__(self, team_name, division_id=0, division_name='', wins=0, losses=0):
+        self.team_name = team_name
+        self.division_id = division_id
+        self.division_name = division_name
+        self.wins = wins
+        self.losses = losses
+
+
+class FakeStandingsLeague:
+    """standings() returns teams already in ESPN's playoff-seed order."""
+
+    def __init__(self, teams, playoff_team_count=4):
+        self._teams = teams
+        self.settings = SimpleNamespace(playoff_team_count=playoff_team_count)
+
+    def standings(self):
+        return self._teams
+
+
+def two_division_league(playoff_team_count=4):
+    """Six teams, seeds 1-6, alternating East/West by seed."""
+    return FakeStandingsLeague([
+        FakeStandingsTeam('Alpha', 1, 'East', wins=3, losses=0),
+        FakeStandingsTeam('Bravo', 2, 'West', wins=3, losses=0),
+        FakeStandingsTeam('Charlie', 1, 'East', wins=2, losses=1),
+        FakeStandingsTeam('Delta', 2, 'West', wins=1, losses=2),
+        FakeStandingsTeam('Echo', 2, 'West', wins=1, losses=2),
+        FakeStandingsTeam('Foxtrot', 1, 'East', wins=0, losses=3),
+    ], playoff_team_count=playoff_team_count)
+
+
+def names_by_division(league):
+    return [(name, [team.team_name for _, team, _ in rows])
+            for name, rows in espn.division_standings(league)]
+
+
+def markers_by_name(league):
+    return {team.team_name: marker
+            for _, rows in espn.division_standings(league)
+            for _, team, marker in rows}
+
+
+class TestDivisionStandings:
+    ############ For `division_standings`
+    def test_teams_are_grouped_by_division_in_standings_order(self):
+        assert names_by_division(two_division_league()) == [
+            ('East', ['Alpha', 'Charlie', 'Foxtrot']),
+            ('West', ['Bravo', 'Delta', 'Echo']),
+        ]
+
+    def test_rank_restarts_at_one_in_each_division(self):
+        ranks = [[rank for rank, _, _ in rows]
+                 for _, rows in espn.division_standings(two_division_league())]
+        assert ranks == [[1, 2, 3], [1, 2, 3]]
+
+    def test_top_team_of_each_division_leads_it(self):
+        markers = markers_by_name(two_division_league())
+        assert markers['Alpha'] == espn.DIVISION_LEADER
+        assert markers['Bravo'] == espn.DIVISION_LEADER
+
+    def test_remaining_playoff_spots_go_to_best_non_leaders(self):
+        # 4 playoff spots, 2 division leaders, so seeds 3 and 4 are wild cards.
+        markers = markers_by_name(two_division_league(playoff_team_count=4))
+        assert markers['Charlie'] == espn.WILD_CARD
+        assert markers['Delta'] == espn.WILD_CARD
+
+    def test_teams_outside_the_playoff_field_are_unmarked(self):
+        markers = markers_by_name(two_division_league(playoff_team_count=4))
+        assert markers['Echo'] == ''
+        assert markers['Foxtrot'] == ''
+
+    def test_wild_card_count_follows_playoff_team_count(self):
+        markers = markers_by_name(two_division_league(playoff_team_count=5))
+        assert markers['Echo'] == espn.WILD_CARD
+
+    def test_no_wild_cards_when_every_spot_is_a_division_title(self):
+        markers = markers_by_name(two_division_league(playoff_team_count=2))
+        assert [name for name, marker in markers.items() if marker == espn.WILD_CARD] == []
+
+    def test_fewer_playoff_spots_than_divisions_adds_no_wild_cards(self):
+        markers = markers_by_name(two_division_league(playoff_team_count=1))
+        assert [name for name, marker in markers.items() if marker == espn.WILD_CARD] == []
+
+    def test_league_without_divisions_is_one_unnamed_group(self):
+        league = FakeStandingsLeague([FakeStandingsTeam('Solo', wins=1, losses=0),
+                                      FakeStandingsTeam('Duo', wins=0, losses=1)])
+        assert names_by_division(league) == [('', ['Solo', 'Duo'])]
+
+    def test_league_without_divisions_has_no_markers(self):
+        league = FakeStandingsLeague([FakeStandingsTeam('Solo'), FakeStandingsTeam('Duo')])
+        assert set(markers_by_name(league).values()) == {''}
+
+    def test_division_without_a_name_falls_back_to_its_id(self):
+        league = FakeStandingsLeague([FakeStandingsTeam('Solo', division_id=0),
+                                      FakeStandingsTeam('Duo', division_id=1)])
+        assert [name for name, _ in espn.division_standings(league)] == ['Division 0', 'Division 1']
+
+
+class TestStandingsLegend:
+    ############ For `standings_legend`
+    def test_legend_names_both_markers(self):
+        legend = espn.standings_legend(two_division_league())
+        assert espn.DIVISION_LEADER in legend and espn.WILD_CARD in legend
+
+    def test_no_legend_for_a_league_without_divisions(self):
+        assert espn.standings_legend(FakeStandingsLeague([FakeStandingsTeam('Solo')])) == ''
+
+
+class TestGetStandings:
+    ############ For `get_standings`
+    def test_one_titled_block_per_division(self):
+        out = espn.get_standings(two_division_league())
+        assert 'Current Standings - East' in out
+        assert 'Current Standings - West' in out
+
+    def test_divisions_are_separated_by_a_blank_line(self):
+        blocks = espn.get_standings(two_division_league()).split('\n\n')
+        assert blocks[0].splitlines()[0] == 'Current Standings - East'
+        assert blocks[1].splitlines()[0] == 'Current Standings - West'
+
+    def test_team_lines_carry_rank_record_and_marker(self):
+        lines = espn.get_standings(two_division_league()).splitlines()
+        assert lines[1] == f' 1: (3-0) Alpha {espn.DIVISION_LEADER}'
+        assert lines[2] == f' 2: (2-1) Charlie {espn.WILD_CARD}'
+
+    def test_legend_is_the_last_line(self):
+        out = espn.get_standings(two_division_league())
+        assert out.splitlines()[-1] == espn.standings_legend(two_division_league())
+
+    def test_league_without_divisions_keeps_the_single_untitled_block(self):
+        league = FakeStandingsLeague([FakeStandingsTeam('Solo', wins=1, losses=0),
+                                      FakeStandingsTeam('Duo', wins=0, losses=1)])
+        assert espn.get_standings(league) == 'Current Standings\n 1: (1-0) Solo \n 2: (0-1) Duo '
+
+    def test_trailing_space_in_a_team_name_does_not_double_up(self):
+        # ESPN hands back team names with stray trailing whitespace.
+        league = FakeStandingsLeague([
+            FakeStandingsTeam('Padded ', 1, 'East', wins=1, losses=0),
+            FakeStandingsTeam('Bravo', 2, 'West', wins=1, losses=0),
+        ])
+        assert espn.get_standings(league).splitlines()[1] == f' 1: (1-0) Padded {espn.DIVISION_LEADER}'
+
+    def test_records_are_padded_across_every_division(self):
+        league = FakeStandingsLeague([
+            FakeStandingsTeam('Alpha', 1, 'East', wins=10, losses=0),
+            FakeStandingsTeam('Bravo', 2, 'West', wins=9, losses=1),
+        ])
+        assert '(10-0)' in espn.get_standings(league)
+        assert '( 9-1)' in espn.get_standings(league)

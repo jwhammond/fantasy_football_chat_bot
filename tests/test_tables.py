@@ -1,5 +1,6 @@
 import sys
 import os
+from types import SimpleNamespace
 sys.path.insert(1, os.path.abspath('.'))
 
 import gamedaybot.espn.tables as tables
@@ -18,12 +19,15 @@ class FakePlayer:
 
 
 class FakeTeam:
-    def __init__(self, name, abbrev, wins=0, losses=0, playoff_pct=0.0):
+    def __init__(self, name, abbrev, wins=0, losses=0, playoff_pct=0.0,
+                 division_id=0, division_name=''):
         self.team_name = name
         self.team_abbrev = abbrev
         self.wins = wins
         self.losses = losses
         self.playoff_pct = playoff_pct
+        self.division_id = division_id
+        self.division_name = division_name
 
 
 class FakeBox:
@@ -152,26 +156,69 @@ class TestCloseScoresTable:
 
 
 class FakeStandingsLeague:
-    def __init__(self, teams):
+    def __init__(self, teams, playoff_team_count=4):
         self._teams = teams
+        self.settings = SimpleNamespace(playoff_team_count=playoff_team_count)
 
     def standings(self):
         return self._teams
 
 
-class TestStandingsTable:
-    def test_title_columns_and_rows_in_rank_order(self):
+def two_division_league():
+    """Four teams, seeds 1-4, alternating East/West, 4 playoff spots."""
+    return FakeStandingsLeague([
+        FakeTeam('Alpha', 'ALP', wins=3, losses=0, division_id=1, division_name='East'),
+        FakeTeam('Bravo', 'BRV', wins=3, losses=0, division_id=2, division_name='West'),
+        FakeTeam('Charlie', 'CHR', wins=2, losses=1, division_id=1, division_name='East'),
+        FakeTeam('Delta', 'DLT', wins=1, losses=2, division_id=2, division_name='West'),
+    ])
+
+
+class TestStandingsTables:
+    def test_one_table_per_division_titled_with_its_name(self):
+        assert [t.title for t in tables.standings_tables(two_division_league())] == [
+            'Current Standings - East', 'Current Standings - West']
+
+    def test_columns_are_unchanged(self):
+        east = tables.standings_tables(two_division_league())[0]
+        assert east.headers == ['Rank', 'Record', 'Team']
+        assert east.align == ['right', 'center', 'left']
+
+    def test_rank_restarts_at_one_in_each_division(self):
+        west = tables.standings_tables(two_division_league())[1]
+        assert [row[0] for row in west.rows] == ['1', '2']
+
+    def test_playoff_marker_is_appended_to_the_team_cell(self):
+        east, west = tables.standings_tables(two_division_league())
+        assert east.rows == [['1', '3-0', f'Alpha {espn.DIVISION_LEADER}'],
+                             ['2', '2-1', f'Charlie {espn.WILD_CARD}']]
+        assert west.rows[0] == ['1', '3-0', f'Bravo {espn.DIVISION_LEADER}']
+
+    def test_team_outside_the_playoff_field_has_a_bare_name(self):
+        league = FakeStandingsLeague(two_division_league()._teams, playoff_team_count=2)
+        assert tables.standings_tables(league)[0].rows[1] == ['2', '2-1', 'Charlie']
+
+    def test_league_without_divisions_is_one_untitled_table(self):
         league = FakeStandingsLeague([FakeTeam('First', 'ONE', wins=3, losses=0),
                                       FakeTeam('Second', 'TWO', wins=2, losses=1)])
-        t = tables.standings_table(league)
-        assert t.title == 'Current Standings'
-        assert t.headers == ['Rank', 'Record', 'Team']
-        assert t.align == ['right', 'center', 'left']
-        assert t.rows == [['1', '3-0', 'First'], ['2', '2-1', 'Second']]
+        table, = tables.standings_tables(league)
+        assert table.title == 'Current Standings'
+        assert table.rows == [['1', '3-0', 'First'], ['2', '2-1', 'Second']]
+
+    def test_trailing_space_in_a_team_name_does_not_double_up(self):
+        league = FakeStandingsLeague([
+            FakeTeam('Padded ', 'PAD', wins=1, losses=0, division_id=1, division_name='East'),
+            FakeTeam('Bravo', 'BRV', wins=1, losses=0, division_id=2, division_name='West'),
+        ])
+        assert tables.standings_tables(league)[0].rows[0][2] == f'Padded {espn.DIVISION_LEADER}'
+
+    def test_whitespace_only_team_name_is_not_an_empty_cell(self):
+        table, = tables.standings_tables(FakeStandingsLeague([FakeTeam('   ', 'X')]))
+        assert table.rows[0][2] == '-'
 
     def test_empty_team_name_is_not_an_empty_cell(self):
-        t = tables.standings_table(FakeStandingsLeague([FakeTeam('', 'X')]))
-        assert t.rows[0][2] == '-'
+        table, = tables.standings_tables(FakeStandingsLeague([FakeTeam('', 'X')]))
+        assert table.rows[0][2] == '-'
 
 
 class FakePowerLeague:
