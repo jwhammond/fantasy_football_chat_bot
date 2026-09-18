@@ -26,7 +26,8 @@ def scheduler():
     # power rankings:                     tuesday evening at 6:30pm local time.
     # trophies:                           tuesday morning at 7:30am local time.
     # standings:                          wednesday morning at 7:30am local time.
-    # waiver report:                      wednesday morning at 7:31am local time. (optional)
+    # waiver report:                      every day but tuesday at 12:05pm east coast time,
+    #                                     just after the league's noon waiver processing.
     # matchups:                           thursday evening at 7:30pm east coast time.
     # score update:                       friday, monday, and tuesday morning at 7:30am local time.
     # player monitor report:              sunday morning at 7:30am local time.
@@ -44,10 +45,15 @@ def scheduler():
     sched.add_job(espn_bot, 'cron', ['get_standings'], id='standings',
                   day_of_week='wed', hour=7, minute=30, start_date=ff_start_date, end_date=ff_end_date,
                   timezone=my_timezone, replace_existing=True)
-    waiver_days = '*' if data['daily_waiver'] else 'wed'
+    # The league processes waivers at noon ET every day but Tuesday, and the
+    # report only covers transactions dated today -- so it runs just after
+    # that batch, on game time rather than local time. DAILY_WAIVER adds the
+    # one day the league does not process, for a league that changes its
+    # schedule without changing this default.
+    waiver_days = '*' if data['daily_waiver'] else 'mon,wed,thu,fri,sat,sun'
     sched.add_job(espn_bot, 'cron', ['get_waiver_report'], id='waiver_report',
-                  day_of_week=waiver_days, hour=7, minute=31, start_date=ff_start_date, end_date=ff_end_date,
-                  timezone=my_timezone, replace_existing=True)
+                  day_of_week=waiver_days, hour=12, minute=5, start_date=ff_start_date, end_date=ff_end_date,
+                  timezone=game_timezone, replace_existing=True)
 
     sched.add_job(espn_bot, 'cron', ['get_matchups'], id='matchups',
                   day_of_week='thu', hour=19, minute=30, start_date=ff_start_date, end_date=ff_end_date,

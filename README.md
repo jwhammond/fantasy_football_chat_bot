@@ -132,11 +132,14 @@ to `END_DATE`, and the bot goes quiet once the league's matchup periods are over
 | Final scores + trophies | Tue | 7:30 AM local | Last week's finals plus all 10 weekly awards |
 | Power Rankings | Tue | 6:30 PM local | Two-step dominance rankings with week-over-week movement |
 | Standings | Wed | 7:30 AM local | Current standings |
-| Waiver Report | Wed | 7:31 AM local | Every add/drop from the day, with FAAB bids and the outbid rival in FAAB leagues |
+| Waiver Report | Every day but Tue | 12:05 PM ET | Every add/drop from the day, with FAAB bids and the outbid rival in FAAB leagues - sent just after the noon ET waiver run |
 | Matchups + projections | Thu | 7:30 PM ET | Next week's matchups with records |
 
-Optional: `DAILY_WAIVER` moves the Waiver Report to a daily send, and `MONITOR_REPORT`
-(on by default) controls the Sunday Players to Monitor message.
+Optional: `DAILY_WAIVER` adds Tuesday, so the Waiver Report runs all seven days, and
+`MONITOR_REPORT` (on by default) controls the Sunday Players to Monitor message.
+
+The Waiver Report only covers claims dated that same day, so it is scheduled just after
+the noon ET processing run rather than in the morning before it.
 
 The managed schedule - including the daily Waiver Report and the Elite chart messages -
 is at [gamedaybot.com/message-schedule](https://www.gamedaybot.com/message-schedule/).

@@ -46,20 +46,52 @@ def day_of_week(job):
     raise AssertionError('trigger has no day_of_week field')
 
 
+def hour_minute(job):
+    """Pull the (hour, minute) out of an APScheduler CronTrigger."""
+    fields = {field.name: str(field) for field in job.trigger.fields}
+    return fields['hour'], fields['minute']
+
+
 class TestWaiverSchedule:
     ############ For the DAILY_WAIVER schedule
-    # Default: Wednesday only
-    def test_waiver_defaults_to_wednesday(self, jobs, monkeypatch):
+    # Default: every day the league processes waivers, which is every day but
+    # Tuesday.
+    def test_waiver_defaults_to_the_league_waiver_days(self, jobs, monkeypatch):
         monkeypatch.delenv('DAILY_WAIVER', raising=False)
-        assert day_of_week(jobs()['waiver_report']) == 'wed'
+        assert day_of_week(jobs()['waiver_report']) == 'mon,wed,thu,fri,sat,sun'
 
-    # DAILY_WAIVER must ADD days, never trade Wednesday away. The two add_job
-    # calls this replaced shared an id, so the daily one replaced the weekly
-    # one and dropped Wednesday -- the day ESPN processes waivers.
-    def test_daily_waiver_includes_wednesday(self, jobs, monkeypatch):
+    def test_waiver_does_not_run_on_tuesday_by_default(self, jobs, monkeypatch):
+        monkeypatch.delenv('DAILY_WAIVER', raising=False)
+        assert 'tue' not in day_of_week(jobs()['waiver_report'])
+
+    # The report only includes transactions dated today, so it has to land
+    # after the league's noon ET processing -- not before it, and not while it
+    # is still running.
+    def test_waiver_runs_just_after_noon_eastern(self, jobs, monkeypatch):
+        monkeypatch.delenv('DAILY_WAIVER', raising=False)
+        job = jobs()['waiver_report']
+        assert hour_minute(job) == ('12', '5')
+        assert str(job.trigger.timezone) == 'America/New_York'
+
+    # DAILY_WAIVER must ADD days, never trade the default days away. The two
+    # add_job calls this replaced shared an id, so the daily one replaced the
+    # weekly one and dropped Wednesday -- a day ESPN processes waivers.
+    def test_daily_waiver_includes_the_default_days(self, jobs, monkeypatch):
         monkeypatch.setenv('DAILY_WAIVER', 'True')
-        assert 'wed' in day_of_week(jobs()['waiver_report']) or \
-            day_of_week(jobs()['waiver_report']) == '*'
+        assert day_of_week(jobs()['waiver_report']) == '*'
+
+    def test_daily_waiver_adds_tuesday(self, jobs, monkeypatch):
+        monkeypatch.setenv('DAILY_WAIVER', 'True')
+        monkeypatch.delenv('DAILY_WAIVER', raising=False)
+        default_days = day_of_week(jobs()['waiver_report'])
+        monkeypatch.setenv('DAILY_WAIVER', 'True')
+        assert 'tue' not in default_days and day_of_week(jobs()['waiver_report']) == '*'
+
+    def test_daily_waiver_keeps_the_noon_eastern_time(self, jobs, monkeypatch):
+        monkeypatch.setenv('DAILY_WAIVER', 'True')
+        job = jobs()['waiver_report']
+        assert hour_minute(job) == ('12', '5')
+        assert str(job.trigger.timezone) == 'America/New_York'
 
     def test_daily_waiver_runs_every_day(self, jobs, monkeypatch):
         monkeypatch.setenv('DAILY_WAIVER', 'True')
