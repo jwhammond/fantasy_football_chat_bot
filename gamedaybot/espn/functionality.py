@@ -369,50 +369,63 @@ def scan_roster(lineup, team):
         A list of strings containing the list of players to monitor, formatted as a list of player names and statuses.
     """
 
-    count = 0
-    players = []
+    flagged = monitor_roster(lineup)
+    if not flagged:
+        return ""
+
+    roster_lines = ""
+    for player, reason in flagged:
+        roster_lines += '%s - %s\n' % (player, reason)
+
+    return [('%s: \n%s \n' % (team.team_name, roster_lines[:-1])).lstrip()]
+
+
+def monitor_roster(lineup):
+    """
+    Return the starters on a roster that need watching, as (player, reason).
+
+    The same selection scan_roster renders as text, structured for the Slack
+    monitor table so the two can never disagree about who is flagged. A
+    starter is flagged for one reason only, in the priority order documented
+    on scan_roster; a player in an IR slot is reported separately when they
+    are no longer IR-eligible.
+
+    Parameters
+    ----------
+    lineup : list
+        A list of player objects that represents the lineup.
+
+    Returns
+    -------
+    list of (str, str)
+        ('POS Name', reason) for each flagged slot, in lineup order.
+    """
+    flagged = []
     for i in lineup:
         # exclude bench and injured players and active or normal players
         if i.slot_position != 'BE' and i.slot_position != 'IR':
             if i.injuryStatus != 'ACTIVE' and i.injuryStatus != 'NORMAL' \
                     and i.game_played == 0:
 
-                count += 1
-                player = i.position + ' ' + i.name + ' - ' + i.injuryStatus.title().replace('_', ' ')
-                players += [player]
+                flagged.append((i.position + ' ' + i.name,
+                                i.injuryStatus.title().replace('_', ' ')))
 
             elif i.on_bye_week:
                 # espn_api leaves game_played at 100 for a bye (it is only set
                 # for players whose pro team has a game that week), so neither
                 # the injury rule above nor the projection rule below can catch
                 # these -- a bye needs its own branch.
-                count += 1
-                player = i.position + ' ' + i.name + ' - BYE'
-                players += [player]
+                flagged.append((i.position + ' ' + i.name, 'BYE'))
 
             elif i.projected_points == 0 and i.game_played == 0:
-                count += 1
-                player = i.position + ' ' + i.name + ' - Projected 0'
-                players += [player]
+                flagged.append((i.position + ' ' + i.name, 'Projected 0'))
 
         if i.slot_position == 'IR' and \
             i.injuryStatus != 'INJURY_RESERVE' and i.injuryStatus != 'OUT':
 
-            count += 1
-            player = i.position + ' ' + i.name + ' - Not IR eligible'
-            players += [player]
+            flagged.append((i.position + ' ' + i.name, 'Not IR eligible'))
 
-    roster_lines = ""
-    report = ""
-
-    for p in players:
-        roster_lines += p + "\n"
-
-    if count > 0:
-        s = '%s: \n%s \n' % (team.team_name, roster_lines[:-1])
-        report = [s.lstrip()]
-
-    return report
+    return flagged
 
 
 def get_matchups(league, week=None, box_scores=None):
@@ -598,20 +611,20 @@ def waiver_player_positions(league, transactions, today):
     return positions
 
 
-def get_waiver_report(league, faab=False, scoring_period=None, test_date=None):
+def waiver_moves(league, faab=False, scoring_period=None, test_date=None):
     """
-    Generate a waiver report for a given league and scoring period.
+    Collect the day's executed waiver claims as structured moves.
 
-    The report lists all waiver transactions that occurred on the specified date (defaults to today),
-    including the team that made the transaction, the player(s) added, and the player(s) dropped (if applicable).
-    If faab is True, the report will include FAAB amount spent and will be sorted from largest to smallest FAAB bid.
+    The same selection and ordering get_waiver_report renders as text,
+    structured for the Slack waiver table so the two can never disagree about
+    which claims are reported or in what order.
 
     Parameters
     ----------
     league : object
         The league object for which the report is being generated.
     faab : bool, optional
-        If True, include FAAB amount spent and sort report by FAAB descending. Defaults to False.
+        If True, include the FAAB detail and sort by FAAB descending. Defaults to False.
     scoring_period : int, optional
         The scoring period to query transactions for. Defaults to league.scoringPeriodId.
     test_date : str, optional
@@ -619,8 +632,13 @@ def get_waiver_report(league, faab=False, scoring_period=None, test_date=None):
 
     Returns
     -------
-    str
-        A formatted string containing the waiver report.
+    (str, list)
+        The report date, and one entry per executed claim as
+        (team_name, moves), where moves is a list of
+        (action, position, player, detail) tuples. action is 'ADDED' or
+        'DROPPED' with every add preceding every drop; detail carries the
+        FAAB amount and any outbid callout for an add, and is '' otherwise.
+        The entry list is empty when nothing was claimed that day.
     """
 
 
@@ -644,7 +662,7 @@ def get_waiver_report(league, faab=False, scoring_period=None, test_date=None):
         if 'No transactions found' not in str(exc):
             raise
         logger.info('No transactions for scoring period %s; nothing to report', scoring_period)
-        return ''
+        return (test_date if test_date else date.today().strftime('%Y-%m-%d'), [])
 
     today = test_date if test_date else date.today().strftime('%Y-%m-%d')
 
@@ -674,7 +692,7 @@ def get_waiver_report(league, faab=False, scoring_period=None, test_date=None):
 
     positions = waiver_player_positions(league, transactions, today)
 
-    entries = []  # (faab_amount, formatted block)
+    entries = []  # (faab_amount, team_name, moves)
     for txn in transactions:
         # Only include transactions matching the report date that went through
         if transaction_date(txn) != today or txn.status != TXN_STATUS_EXECUTED:
@@ -685,17 +703,17 @@ def get_waiver_report(league, faab=False, scoring_period=None, test_date=None):
         faab_amount = getattr(txn, 'bid_amount', None) or 0
 
         # Adds and drops are collected separately rather than in item order, so
-        # every ADDED line precedes every DROPPED line in the rendered block.
+        # every ADDED move precedes every DROPPED move in the entry.
         adds, drops = [], []
         for item in txn.items:
             # 'N/A' when ESPN did not resolve the id; league.player_info
             # returns None for those and None.position would crash the report.
             position = positions.get(getattr(item, 'playerId', None), 'N/A')
             if item.type == TXN_ITEM_DROP:
-                drops.append(f"DROPPED {position} - {item.player}")
+                drops.append(('DROPPED', position, item.player, ''))
             elif item.type == TXN_ITEM_ADD:
                 if not faab:
-                    adds.append(f"ADDED {position} - {item.player}")
+                    adds.append(('ADDED', position, item.player, ''))
                     continue
                 # Only a *rival's* losing bid is competition: a team that also
                 # outbid its own failed claim on the same player beat nobody.
@@ -707,20 +725,62 @@ def get_waiver_report(league, faab=False, scoring_period=None, test_date=None):
                     runner_up[0] if runner_up else None,
                     runner_up[1] if runner_up else None,
                 )
-                adds.append(f"ADDED {position} - {item.player} (${faab_amount}{callout})")
+                adds.append(('ADDED', position, item.player, f"${faab_amount}{callout}"))
 
-        block = f"{team_name} \n" + ''.join(f"{move}\n" for move in adds + drops)
-        entries.append((faab_amount, block.lstrip()))
+        entries.append((faab_amount, team_name, adds + drops))
 
     if faab:
         # Sort by faab_amount descending
         entries.sort(key=lambda entry: entry[0], reverse=True)
 
+    return today, [(team_name, moves) for _, team_name, moves in entries]
+
+
+def get_waiver_report(league, faab=False, scoring_period=None, test_date=None):
+    """
+    Generate a waiver report for a given league and scoring period.
+
+    The report lists all waiver transactions that occurred on the specified date (defaults to today),
+    including the team that made the transaction, the player(s) added, and the player(s) dropped (if applicable).
+    If faab is True, the report will include FAAB amount spent and will be sorted from largest to smallest FAAB bid.
+
+    Parameters
+    ----------
+    league : object
+        The league object for which the report is being generated.
+    faab : bool, optional
+        If True, include FAAB amount spent and sort report by FAAB descending. Defaults to False.
+    scoring_period : int, optional
+        The scoring period to query transactions for. Defaults to league.scoringPeriodId.
+    test_date : str, optional
+        Date string (YYYY-MM-DD) to simulate 'today' for testing historical transactions. Defaults to current date.
+
+    Returns
+    -------
+    str
+        A formatted string containing the waiver report, or '' when no claim
+        was executed on the report date.
+    """
+    today, entries = waiver_moves(league, faab=faab, scoring_period=scoring_period,
+                                  test_date=test_date)
+
     # Only return a report if there are transactions
     if not entries:
         return ''
 
-    return '\n'.join([f'Waiver Report {today}:'] + [block for _, block in entries])
+    blocks = []
+    for team_name, moves in entries:
+        lines = ''.join(f"{_waiver_move_line(move)}\n" for move in moves)
+        blocks.append((f"{team_name} \n" + lines).lstrip())
+
+    return '\n'.join([f'Waiver Report {today}:'] + blocks)
+
+
+def _waiver_move_line(move):
+    """Render one (action, position, player, detail) move as a report line."""
+    action, position, player, detail = move
+    line = f"{action} {position} - {player}"
+    return f"{line} ({detail})" if detail else line
 
 
 P_RANK_UP_EMOJI = "🟢"
@@ -1208,7 +1268,10 @@ def get_lucky_trophy(league, week=None, recap=False, box_scores=None):
     return trophies
 
 
-def get_trophies(league, week=None, recap=False, box_scores=None):
+TROPHY_TITLE = 'Trophies of the week:'
+
+
+def get_trophies(league, week=None, recap=False, box_scores=None, pairs=False):
     """
     Returns trophies for the highest score, lowest score, closest score, and biggest win.
 
@@ -1222,10 +1285,13 @@ def get_trophies(league, week=None, recap=False, box_scores=None):
         Pre-fetched box scores for the same week, to avoid a duplicate API call.
         Also passed on to the lucky, achiever and optimal-lineup trophies, so
         the whole trophy set costs a single box_scores call.
+    pairs : bool, optional
+        Return (label, value) pairs without the title line instead of the
+        rendered text. Callers want trophy_pairs, which wraps this.
 
     Returns
     -------
-    str
+    str, or list of (str, str) when pairs is True
         A string representing the trophies
     """
     if not week:
@@ -1296,20 +1362,52 @@ def get_trophies(league, week=None, recap=False, box_scores=None):
     high_score_str = ['👑 High score 👑']+['%s with %.2f points' % (high_team.team_name, high_score)]
     low_score_str = ['💩 Low score 💩']+['%s with %.2f points' % (low_team.team_name, low_score)]
 
-    text = ['Trophies of the week:'] + high_score_str + low_score_str
+    lines = high_score_str + low_score_str
 
     # Both of these need a non-zero margin somewhere in the week; a slate of
     # ties (including an unplayed week) has neither.
     if blown_out is not None:
-        text += ['😱 Blow out 😱'] + ['%s blew out %s by %.2f points' % (ownerer.team_name, blown_out.team_name, biggest_blowout)]
+        lines += ['😱 Blow out 😱'] + ['%s blew out %s by %.2f points' % (ownerer.team_name, blown_out.team_name, biggest_blowout)]
     if close_winner is not None:
-        text += ['😅 Close win 😅'] + ['%s barely beat %s by %.2f points' %
-                                      (close_winner.team_name, close_loser.team_name, closest_score)]
+        lines += ['😅 Close win 😅'] + ['%s barely beat %s by %.2f points' %
+                                       (close_winner.team_name, close_loser.team_name, closest_score)]
 
-    text += get_lucky_trophy(league, week, box_scores=box_scores) + \
+    lines += get_lucky_trophy(league, week, box_scores=box_scores) + \
         get_achievers_trophy(league, week, box_scores=box_scores) + \
         optimal_team_scores(league, week, box_scores=box_scores)
-    return '\n'.join(text)
+
+    if pairs:
+        # Every trophy helper above builds its awards as a label line followed
+        # by its value line, so the flat list is strictly alternating.
+        return list(zip(lines[::2], lines[1::2]))
+    return '\n'.join([TROPHY_TITLE] + lines)
+
+
+def trophy_pairs(league, week=None, box_scores=None):
+    """
+    Return the week's trophies as (label, value) pairs.
+
+    The same awards get_trophies renders as text, structured for Slack's
+    list_blocks so the two can never disagree about which trophies were won.
+
+    Parameters
+    ----------
+    league : object
+        The league object for which the trophies are to be returned.
+    week : int, optional
+        The week to award for. Defaults to the previous week.
+    box_scores : list, optional
+        Pre-fetched box scores for the same week, to avoid a duplicate API call.
+
+    Returns
+    -------
+    list of (str, str), or None
+        (label, value) pairs in award order, or None for a week with nothing
+        played -- the case where get_trophies returns its NO_TROPHY_DATA
+        sentinel.
+    """
+    result = get_trophies(league, week=week, box_scores=box_scores, pairs=True)
+    return None if result == util.NO_TROPHY_DATA else result
 
 
 def get_player_achievers(league, week=None, return_number=2):

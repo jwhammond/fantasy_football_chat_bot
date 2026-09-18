@@ -8,10 +8,11 @@ about which platform receives what, not about report content.
 import sys
 import os
 import pytest
+from types import SimpleNamespace
 sys.path.insert(1, os.path.abspath('.'))
 
 import gamedaybot.espn.espn_bot as bot_module
-from gamedaybot.espn.tables import Table
+from gamedaybot.espn.tables import Table, LabeledList
 from gamedaybot.chat.slack import Slack
 
 
@@ -34,6 +35,8 @@ class FakeLeague:
         self.firstScoringPeriod = 1
         self.finalScoringPeriod = 17
         self.current_week = 3
+        # get_waiver_report reads settings.faab to pick the report format.
+        self.settings = SimpleNamespace(faab=True)
 
 
 SAMPLE_TABLE = Table('Matchups', ['Home', 'Proj', 'Away', 'Proj'],
@@ -82,12 +85,67 @@ def test_matchups_sends_text_to_groupme_discord_and_table_to_slack(bots, monkeyp
 
 
 def test_text_only_report_goes_to_slack_as_text(bots, monkeypatch):
-    monkeypatch.setattr(bot_module.espn, 'get_monitor', lambda league: 'Starting Players to Monitor\nQB Someone - Questionable')
+    # trophy_recap has no structured builder, so it still falls back to text.
+    monkeypatch.setattr(bot_module.recap, 'trophy_recap', lambda league: 'Trophy Recap\nA: 2')
+
+    bot_module.espn_bot('trophy_recap')
+
+    assert bots['slack'].messages == ['Trophy Recap\nA: 2']
+    assert bots['slack'].blocks == []
+
+
+def test_monitor_goes_to_slack_as_a_table(bots, monkeypatch):
+    monkeypatch.setattr(bot_module.espn, 'fetch_box_scores', lambda league, week=None: ['box'])
+    monkeypatch.setattr(bot_module.espn, 'get_monitor',
+                        lambda league, **kw: 'Starting Players to Monitor\nQB Someone - Questionable')
+    monkeypatch.setattr(bot_module.tables, 'monitor_table', lambda league, **kw: Table(
+        'Starting Players to Monitor', ['Team', 'Player', 'Status'],
+        [['A', 'QB Someone', 'Questionable']], ['left', 'left', 'left']))
 
     bot_module.espn_bot('get_monitor')
 
-    assert bots['slack'].messages == ['Starting Players to Monitor\nQB Someone - Questionable']
-    assert bots['slack'].blocks == []
+    assert bots['slack'].messages == []
+    (blocks, fallback), = bots['slack'].blocks
+    assert [b['type'] for b in blocks] == ['section', 'table']
+    assert fallback == 'Starting Players to Monitor\nQB Someone - Questionable'
+
+
+def test_trophies_go_to_slack_as_a_labeled_list_not_a_code_block(bots, monkeypatch):
+    monkeypatch.setattr(bot_module.espn, 'fetch_box_scores', lambda league, week=None: ['box'])
+    monkeypatch.setattr(bot_module.espn, 'get_trophies',
+                        lambda league, **kw: 'Trophies of the week:\n\U0001F451 High score \U0001F451\nA with 100.00 points')
+    monkeypatch.setattr(bot_module.tables, 'trophies_list', lambda league, **kw: LabeledList(
+        'Trophies of the week:', [('\U0001F451 High score \U0001F451', 'A with 100.00 points')]))
+
+    bot_module.espn_bot('get_trophies')
+
+    (blocks, _), = bots['slack'].blocks
+    assert [b['type'] for b in blocks] == ['section', 'section']
+    assert blocks[1]['text']['text'] == '*\U0001F451 High score \U0001F451*\nA with 100.00 points'
+    assert '```' not in blocks[1]['text']['text']
+
+
+def test_waiver_report_goes_to_slack_as_a_table(bots, monkeypatch):
+    monkeypatch.setattr(bot_module.espn, 'get_waiver_report', lambda league, faab: 'Waiver Report 2026-09-16:\nA\nADDED WR - X ($5)')
+    monkeypatch.setattr(bot_module.tables, 'waiver_table', lambda league, faab, **kw: Table(
+        'Waiver Report 2026-09-16', ['Team', 'Move', 'Pos', 'Player', 'FAAB'],
+        [['A', 'ADDED', 'WR', 'X', '$5']], ['left', 'left', 'left', 'left', 'left']))
+
+    bot_module.espn_bot('get_waiver_report')
+
+    (blocks, _), = bots['slack'].blocks
+    assert [b['type'] for b in blocks] == ['section', 'table']
+
+
+def test_win_matrix_goes_to_slack_as_a_table(bots, monkeypatch):
+    monkeypatch.setattr(bot_module.recap, 'win_matrix', lambda league: 'Standings\n 1. A    (9-2)')
+    monkeypatch.setattr(bot_module.tables, 'win_matrix_table', lambda league: Table(
+        'Standings', ['Rank', 'Team', 'Record'], [['1', 'A', '9-2']], ['right', 'left', 'right']))
+
+    bot_module.espn_bot('win_matrix')
+
+    (blocks, _), = bots['slack'].blocks
+    assert [b['type'] for b in blocks] == ['section', 'table']
 
 
 def test_final_sends_score_table_and_trophies_text_in_one_slack_message(bots, monkeypatch):
@@ -101,6 +159,8 @@ def test_final_sends_score_table_and_trophies_text_in_one_slack_message(bots, mo
         return Table('Final Score Update', ['Home', 'Score', 'Away', 'Score'],
                      [['A (1-0)', '100.00', 'B (0-1)', '90.00']], ['left', 'right', 'left', 'right'])
     monkeypatch.setattr(bot_module.tables, 'scoreboard_table', fake_scoreboard_table)
+    monkeypatch.setattr(bot_module.tables, 'trophies_list', lambda league, **kw: LabeledList(
+        'Trophies of the week:', [('\U0001F451 High score \U0001F451', 'A with 100.00 points')]))
 
     bot_module.espn_bot('get_final')
 
@@ -108,8 +168,10 @@ def test_final_sends_score_table_and_trophies_text_in_one_slack_message(bots, mo
     assert captured['projected'] is False
     assert captured['week'] == 2
     (blocks, fallback), = bots['slack'].blocks
-    assert [b['type'] for b in blocks] == ['section', 'table', 'section']
-    assert blocks[2]['text']['text'].startswith('*Trophies of the week:*\n```')
+    # The score table, then the trophies as a labeled list rather than a code block.
+    assert [b['type'] for b in blocks] == ['section', 'table', 'section', 'section']
+    assert blocks[2]['text']['text'] == '*Trophies of the week:*'
+    assert '```' not in blocks[3]['text']['text']
     assert bots['groupme'].messages == ['Final Score Update\nA 100.00 - 90.00 B\n\nTrophies of the week:\n👑 High score 👑\nA with 100.00 points']
 
 

@@ -106,6 +106,35 @@ def win_matrix(league):
         A string of the standings in the format of "position. team abbreviation (wins-losses)"
     """
 
+    records = win_matrix_records(league)
+
+    standings_txt = [WIN_MATRIX_TITLE]
+    for pos, (abbrev, wins, losses) in enumerate(records, start=1):
+        standings_txt += [f"{pos:2}. {abbrev:4} ({wins}-{losses})"]
+
+    return '\n'.join(standings_txt)
+
+
+WIN_MATRIX_TITLE = "Standings if everyone played every team every week"
+
+
+def win_matrix_records(league):
+    """
+    Compute each team's record if every team had played every other team every week.
+
+    The same computation win_matrix renders as text, structured for the Slack
+    win matrix table so the two can never disagree about the ordering.
+
+    Parameters
+    ----------
+    league : object
+        A league object from the ESPN Fantasy API.
+
+    Returns
+    -------
+    list of (str, int, int)
+        (team abbreviation, wins, losses) sorted by win percentage descending.
+    """
     team_record = {team.team_abbrev: [0, 0] for team in league.teams}
 
     for week in range(1, league.current_week):
@@ -116,12 +145,15 @@ def win_matrix(league):
             team_record[team.team_abbrev][1] += losses
             losses += 1
 
-    team_record = dict(sorted(team_record.items(), key=lambda item: item[1][0] / item[1][1], reverse=True))
+    # Win percentage, not the wins/losses ratio this used to sort by: a team
+    # that beat the whole league every week has zero losses, and dividing by
+    # that crashed the report outright. Every team plays the same number of
+    # matrix games, so the two orderings agree wherever the old one worked.
+    def win_pct(record):
+        wins, losses = record
+        played = wins + losses
+        return wins / played if played else 0
 
-    standings_txt = ["Standings if everyone played every team every week"]
-    pos = 1
-    for team in team_record:
-        standings_txt += [f"{pos:2}. {team:4} ({team_record[team][0]}-{team_record[team][1]})"]
-        pos += 1
+    team_record = dict(sorted(team_record.items(), key=lambda item: win_pct(item[1]), reverse=True))
 
-    return '\n'.join(standings_txt)
+    return [(abbrev, wins, losses) for abbrev, (wins, losses) in team_record.items()]

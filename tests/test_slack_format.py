@@ -3,7 +3,7 @@ import os
 import pytest
 sys.path.insert(1, os.path.abspath('.'))
 
-from gamedaybot.espn.tables import Table
+from gamedaybot.espn.tables import Table, LabeledList
 import gamedaybot.chat.slack_format as fmt
 
 
@@ -146,3 +146,55 @@ class TestTextBlocks:
 
     def test_split_line_never_loops_on_nonpositive_budget(self):
         assert list(fmt._split_line('abc', 0)) == ['a', 'b', 'c']
+
+
+class TestListBlocks:
+    def sample(self, items=None):
+        return LabeledList('Trophies of the week:',
+                           items if items is not None else
+                           [('👑 High score 👑', 'A with 171.30 points'),
+                            ('💩 Low score 💩', 'B with 81.80 points')])
+
+    def test_returns_title_section_then_one_body_section(self):
+        blocks = fmt.list_blocks(self.sample())
+        assert [b['type'] for b in blocks] == ['section', 'section']
+        assert blocks[0]['text'] == {'type': 'mrkdwn', 'text': '*Trophies of the week:*'}
+
+    def test_each_item_is_a_bold_label_over_its_value(self):
+        body = fmt.list_blocks(self.sample())[1]['text']['text']
+        assert body == ('*👑 High score 👑*\nA with 171.30 points\n'
+                        '*💩 Low score 💩*\nB with 81.80 points')
+
+    def test_body_is_not_a_code_block(self):
+        assert '```' not in fmt.list_blocks(self.sample())[1]['text']['text']
+
+    def test_labels_and_values_are_escaped(self):
+        blocks = fmt.list_blocks(self.sample([('A & B', '<C> beat D')]))
+        assert blocks[1]['text']['text'] == '*A &amp; B*\n&lt;C&gt; beat D'
+
+    def test_title_is_escaped(self):
+        blocks = fmt.list_blocks(LabeledList('Tom & Jerry', [('a', 'b')]))
+        assert blocks[0]['text']['text'] == '*Tom &amp; Jerry*'
+
+    def test_no_items_is_title_only(self):
+        assert fmt.list_blocks(LabeledList('Empty', [])) == [
+            {'type': 'section', 'text': {'type': 'mrkdwn', 'text': '*Empty*'}}]
+
+    def test_splits_into_sections_under_the_character_limit(self):
+        items = [(f'Label {i}', 'v' * 500) for i in range(20)]
+        blocks = fmt.list_blocks(self.sample(items))
+        assert len(blocks) > 2
+        assert all(len(b['text']['text']) <= fmt.SECTION_TEXT_LIMIT for b in blocks)
+
+    def test_never_orphans_a_label_from_its_value(self):
+        items = [(f'Label {i}', 'v' * 500) for i in range(20)]
+        for block in fmt.list_blocks(self.sample(items))[1:]:
+            lines = block['text']['text'].split('\n')
+            assert len(lines) % 2 == 0
+            assert lines[0].startswith('*')
+
+    def test_single_item_larger_than_the_limit_is_split(self):
+        items = [('Label', 'v' * 4000)]
+        blocks = fmt.list_blocks(self.sample(items))
+        assert all(len(b['text']['text']) <= fmt.SECTION_TEXT_LIMIT for b in blocks)
+        assert 'v' * 4000 in ''.join(b['text']['text'] for b in blocks[1:]).replace('\n', '')
