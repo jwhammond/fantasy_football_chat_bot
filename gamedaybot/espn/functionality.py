@@ -148,9 +148,91 @@ def get_projected_scoreboard(league, week=None, box_scores=None):
     return '\n'.join(text)
 
 
+# Playoff status markers appended to a team name in the standings report.
+DIVISION_LEADER = '👑'
+WILD_CARD = '⭐'
+STANDINGS_LEGEND = f"{DIVISION_LEADER} = division leader, {WILD_CARD} = wild card"
+
+
+def division_standings(league):
+    """
+    Group the current standings by division and mark the playoff field.
+
+    Teams keep the league-wide order league.standings() puts them in, so the
+    first team of each division is that division's leader. The remaining
+    playoff spots are wild cards, handed out to the best non-leaders in that
+    same league-wide order.
+
+    Parameters
+    ----------
+    league: object
+        The league object for which to retrieve the standings.
+
+    Returns
+    -------
+    list of (str, list of (int, object, str))
+        One (division name, rows) pair per division, in the order the
+        divisions first appear in the standings. Each row is the team's rank
+        within its division, the team, and its playoff marker (an empty string
+        for a team outside the playoff field). A league without divisions
+        comes back as a single group named '' whose teams are all unmarked.
+    """
+    standings = league.standings()
+
+    divisions = {}
+    for team in standings:
+        divisions.setdefault(getattr(team, 'division_id', 0), []).append(team)
+
+    if len(divisions) < 2:
+        return [('', [(pos, team, '') for pos, team in enumerate(standings, start=1)])]
+
+    leaders = {id(teams[0]) for teams in divisions.values()}
+    # Division winners take one spot each; whatever is left over is wild cards,
+    # which go to the best remaining teams in league-wide standings order.
+    wild_card_count = max(0, league.settings.playoff_team_count - len(divisions))
+    challengers = [team for team in standings if id(team) not in leaders]
+    wild_cards = {id(team) for team in challengers[:wild_card_count]}
+
+    def marker(team):
+        if id(team) in leaders:
+            return DIVISION_LEADER
+        return WILD_CARD if id(team) in wild_cards else ''
+
+    return [(_division_name(teams[0], division_id),
+             [(pos, team, marker(team)) for pos, team in enumerate(teams, start=1)])
+            for division_id, teams in divisions.items()]
+
+
+def _division_name(team, division_id):
+    """The division's name, falling back to its id when ESPN supplies no name."""
+    return getattr(team, 'division_name', '') or f"Division {division_id}"
+
+
+def standings_legend(league):
+    """
+    The marker legend for the standings report.
+
+    Parameters
+    ----------
+    league: object
+        The league object for which to retrieve the standings.
+
+    Returns
+    -------
+    str
+        The legend, or an empty string for a league without divisions, whose
+        standings carry no markers to explain.
+    """
+    return STANDINGS_LEGEND if len(division_standings(league)) > 1 else ''
+
+
 def get_standings(league):
     """
     Retrieve the current standings for a fantasy football league.
+
+    A league with divisions gets one titled block per division, separated by
+    blank lines and followed by the marker legend. A league without divisions
+    gets the single untitled block it has always had.
 
     Parameters
     ----------
@@ -163,15 +245,25 @@ def get_standings(league):
         A string containing the current standings, formatted as a list of teams with their records and positions.
     """
 
-    standings = league.standings()
-    # Records are padded to a common width so the team names all start in the
+    groups = division_standings(league)
+    # Records are padded to a common width -- across every division, so the
+    # blocks line up with each other -- so the team names all start in the
     # same column, whatever mix of 1- and 2-digit win/loss counts the league has.
-    records = util.align_records([f"{team.wins}-{team.losses}" for team in standings])
-    standings_txt = [f"{pos + 1:2}: ({record}) {team.team_name} " for
-                     pos, (team, record) in enumerate(zip(standings, records))]
-    text = ["Current Standings"] + standings_txt
+    records = util.align_records([f"{team.wins}-{team.losses}"
+                                  for _, rows in groups for _, team, _ in rows])
+    padded = iter(records)
 
-    return "\n".join(text)
+    blocks = []
+    for division_name, rows in groups:
+        title = f"Current Standings - {division_name}" if division_name else "Current Standings"
+        # ESPN team names can carry stray trailing whitespace, which would
+        # otherwise double up the space in front of the marker.
+        lines = [f"{pos:2}: ({next(padded)}) {team.team_name.strip()} {marker}"
+                 for pos, team, marker in rows]
+        blocks.append('\n'.join([title] + lines))
+
+    legend = standings_legend(league)
+    return '\n\n'.join(blocks + ([legend] if legend else []))
 
 
 def get_projected_total(lineup):

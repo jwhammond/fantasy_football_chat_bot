@@ -129,7 +129,7 @@ TABULAR_ROUTES = [
     ('get_projected_scoreboard', 'projected_table', 'get_projected_scoreboard'),
     ('get_close_scores', 'close_scores_table', 'get_close_scores'),
     ('get_power_rankings', 'power_rankings_table', 'get_power_rankings'),
-    ('get_standings', 'standings_table', 'get_standings'),
+    ('get_standings', 'standings_tables', 'get_standings'),
 ]
 
 
@@ -151,6 +151,9 @@ def test_tabular_route_sends_text_to_groupme_discord_and_table_to_slack(
     # get_scoreboard_short appends a projected-scoreboard section to its text;
     # stub it out so it doesn't try to read fields off the fake 'box' sentinel.
     monkeypatch.setattr(bot_module.espn, 'get_projected_scoreboard', lambda league, **kw: 'unused')
+    # get_standings asks for its marker legend alongside the tables; the fake
+    # League has no standings() for the real one to read.
+    monkeypatch.setattr(bot_module.espn, 'standings_legend', lambda league: '')
     monkeypatch.setattr(bot_module.espn, text_builder_name, fake_text_builder)
     monkeypatch.setattr(bot_module.tables, table_builder_name, fake_table_builder)
 
@@ -169,6 +172,37 @@ def test_tabular_route_sends_text_to_groupme_discord_and_table_to_slack(
 
     if function == 'get_close_scores':
         assert captured_table_kwargs['threshold'] == captured_text_kwargs['threshold']
+
+
+def test_standings_sends_one_slack_table_per_division_plus_a_legend(bots, monkeypatch):
+    east = Table('Current Standings - East', ['Rank', 'Record', 'Team'], [['1', '3-0', 'A 👑']],
+                 ['right', 'center', 'left'])
+    west = Table('Current Standings - West', ['Rank', 'Record', 'Team'], [['1', '2-1', 'B 👑']],
+                 ['right', 'center', 'left'])
+    monkeypatch.setattr(bot_module.espn, 'get_standings', lambda league: 'Current Standings - East\nA')
+    monkeypatch.setattr(bot_module.espn, 'standings_legend', lambda league: 'LEGEND')
+    monkeypatch.setattr(bot_module.tables, 'standings_tables', lambda league: [east, west])
+
+    bot_module.espn_bot('get_standings')
+
+    (blocks, fallback), = bots['slack'].blocks
+    assert [b['type'] for b in blocks] == ['section', 'table', 'section', 'table', 'section']
+    assert blocks[0]['text']['text'] == '*Current Standings - East*'
+    assert blocks[2]['text']['text'] == '*Current Standings - West*'
+    assert 'LEGEND' in blocks[4]['text']['text']
+
+
+def test_standings_without_divisions_sends_one_table_and_no_legend(bots, monkeypatch):
+    only = Table('Current Standings', ['Rank', 'Record', 'Team'], [['1', '3-0', 'A']],
+                 ['right', 'center', 'left'])
+    monkeypatch.setattr(bot_module.espn, 'get_standings', lambda league: 'Current Standings\nA')
+    monkeypatch.setattr(bot_module.espn, 'standings_legend', lambda league: '')
+    monkeypatch.setattr(bot_module.tables, 'standings_tables', lambda league: [only])
+
+    bot_module.espn_bot('get_standings')
+
+    (blocks, fallback), = bots['slack'].blocks
+    assert [b['type'] for b in blocks] == ['section', 'table']
 
 
 def test_slack_rendering_failure_falls_back_to_text(bots, monkeypatch):

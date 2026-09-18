@@ -65,7 +65,7 @@ Builders return `None` when the corresponding text builder would return its
 | `scoreboard_table(league, week=None, box_scores=None, title="Score Update", projected=True)` | given title | Home, Score (right), Proj (right), Away, Score (right), Proj (right); the two Proj columns are omitted when `projected=False` | one per box score with an away team; scores `%.2f` | no box score has an away team |
 | `projected_table(league, week=None, box_scores=None)` | `Approximate Projected Scores` | Home, Proj (right), Away, Proj (right) | as above | no box score has an away team |
 | `close_scores_table(league, week=None, box_scores=None, threshold=...)` | `Projected Close Scores` | Home, Proj (right), Away, Proj (right) | same selection rule as `get_close_scores` | no matchup is within the threshold |
-| `standings_table(league)` | `Current Standings` | Rank (right), Record (center), Team (left, wrapped) | one per team from `league.standings()` | never |
+| `standings_tables(league)` | `Current Standings - {division}` | Rank (right), Record (center), Team (left, wrapped) | returns a *list*: one Table per division from `division_standings(league)`, ranked within the division; the team cell carries the playoff marker (`👑` division leader, `⭐` wild card). A league without divisions gets a single Table titled `Current Standings` | never |
 | `power_rankings_table(league, week=None)` | `Power Rankings` | Rank (right), Team (left, wrapped), Score (right), Change (right), Playoff % (right) | one per team; Change is `"{emoji}{pct:.1f}%"` or `"-"` for the first ranked week | never |
 
 `get_power_rankings` currently computes normalized scores and week-over-week
@@ -138,7 +138,7 @@ zero-arg callable that produces the blocks below when called.
 | `get_scoreboard_short` | `table_blocks(scoreboard_table(...))` (one table, scores and projections together) |
 | `get_projected_scoreboard` | `table_blocks(projected_table(...))` |
 | `get_close_scores` | `table_blocks(close_scores_table(...))` |
-| `get_standings` | `table_blocks(standings_table(...))` |
+| `get_standings` | `table_blocks(...)` per Table from `standings_tables(...)`, concatenated, + `text_blocks(standings_legend(league))` (the legend is `''` for a league without divisions) |
 | `get_power_rankings` | `table_blocks(power_rankings_table(...))` |
 | `get_final` | `table_blocks(scoreboard_table(..., title="Final Score Update", projected=False))` + `text_blocks(trophies)` (projections are meaningless after the games are played) |
 | everything else | not set |

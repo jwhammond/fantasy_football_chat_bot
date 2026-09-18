@@ -191,14 +191,20 @@ ALMT  94.10 -  99.80 BGLS
 ```
 
 ```
-Current Standings
- 1: (10-3 ) Dynasty Kings
- 2: ( 9-4 ) Gridiron Gods
- 3: ( 8-5 ) The Victors
- 4: ( 7-6 ) Almost There
- 5: ( 5-8 ) Big Losers
- 6: ( 3-10) Punt Life
+Current Standings - East
+ 1: (10-3 ) Dynasty Kings 👑
+ 2: ( 8-5 ) The Victors ⭐
+ 3: ( 3-10) Punt Life
+
+Current Standings - West
+ 1: ( 9-4 ) Gridiron Gods 👑
+ 2: ( 7-6 ) Almost There ⭐
+ 3: ( 5-8 ) Big Losers
+
+👑 = division leader, ⭐ = wild card
 ```
+
+A league without divisions keeps the single untitled list it has always had.
 
 ```
 Power Rankings (Playoff %)
